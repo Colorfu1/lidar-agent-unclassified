@@ -1,0 +1,32 @@
+name: "eval_only_${experiment_id}"
+stages:
+  - id: validate_config
+    type: config_validate
+    inputs:
+      config_path: "${config_path}"
+    fail_fast: true
+
+  - id: submit_eval
+    type: volc_submit
+    depends_on: [validate_config]
+    inputs:
+      yaml_path: "${eval_yaml}"
+
+  - id: monitor_eval
+    type: volc_monitor
+    depends_on: [submit_eval]
+    inputs:
+      task_id: "${submit_eval.output.task_id}"
+      poll_interval: 120
+
+  - id: fetch_results
+    type: result_collect
+    depends_on: [monitor_eval]
+    inputs:
+      result_path: "${eval_work_dir}/results.json"
+
+  - id: store_results
+    type: db_store
+    depends_on: [fetch_results]
+    inputs:
+      experiment_id: "${experiment_id}"

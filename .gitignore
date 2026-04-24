@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+data/*.db
+web/node_modules/
+web/dist/
+pipeline/__pycache__/
+*.pyc
+.claude-runtime/
+.codex-runtime/
+data/model_eval_results/
+data/experiment_tree.png

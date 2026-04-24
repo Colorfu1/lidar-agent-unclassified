@@ -1,0 +1,209 @@
+[
+  {
+    "name": "cloudml_upload",
+    "type": "dag_template",
+    "description": "Upload .plf engine file to CloudML model repo. Prepares upload package (model.plf + metadata.json) then submits to CloudML.",
+    "input_desc": ".plf file path",
+    "output_desc": "CloudML model repo URL",
+    "remote_host": "local",
+    "remote_path": "scripts/prepare_cloudml_upload.py + scripts/submit_cloudml_upload.py"
+  },
+  {
+    "name": "mi_pyvista_vis_multi",
+    "type": "dag_template",
+    "description": "3D point cloud visualization with PyVista. Renders point clouds with OD/FS annotations overlaid. Interactive desktop viewer.",
+    "input_desc": "Config: mi_pyvista_vis_multi.yaml (pkl_file, eval_dir, client, at720)",
+    "output_desc": "Interactive 3D visualization window",
+    "remote_host": "root@localhost:3333",
+    "remote_path": "/high_perf_store3/l3_data/wuwenda/l3_deep/data/mi_pyvista_vis_multi.py"
+  },
+  {
+    "name": "mi_pyvista_vis_multi_browser",
+    "type": "dag_template",
+    "description": "Browser-based 3D point cloud visualization. Serves visualization over WebSocket for remote viewing.",
+    "input_desc": "Config: mi_pyvista_vis_multi_browser.yaml (pkl_file, eval_dir, host, port, fps)",
+    "output_desc": "WebSocket-served 3D visualization on host:port",
+    "remote_host": "root@localhost:3333",
+    "remote_path": "/high_perf_store3/l3_data/wuwenda/l3_deep/data/mi_pyvista_vis_multi_browser.py"
+  },
+  {
+    "name": "mi_pyvista_vis_multi_pl",
+    "type": "dag_template",
+    "description": "3D point cloud visualization (pipeline variant). Renders val results with segmentation overlays.",
+    "input_desc": "Config: mi_pyvista_vis_multi_pl.yaml (pkl_file)",
+    "output_desc": "Interactive 3D visualization",
+    "remote_host": "root@localhost:3333",
+    "remote_path": "/high_perf_store3/l3_data/wuwenda/l3_deep/data/mi_pyvista_vis_multi_pl.py"
+  },
+  {
+    "name": "trt_build_local_large",
+    "type": "dag_template",
+    "description": "Build TRT engine (.plf) for Large model on local docker (3090 GPU). Starts flatformer docker, clones lidar-dl feat_merge branch, runs ONNX conversion + trtexec.",
+    "input_desc": "Model checkpoint path, build params",
+    "output_desc": ".plf engine file on local machine",
+    "remote_host": "local",
+    "remote_path": "scripts/docker_trt10_flatformer.sh"
+  },
+  {
+    "name": "trt_build_local_lite",
+    "type": "dag_template",
+    "description": "Build TRT engine (.plf) for Lite model (S1) on local docker (3090 GPU). Starts flatformer docker, clones lidar-dl dev_lit branch, runs ONNX conversion + trtexec.",
+    "input_desc": "Model checkpoint path, build params (batch size, precision)",
+    "output_desc": ".plf engine file on local machine",
+    "remote_host": "local",
+    "remote_path": "scripts/docker_trt10_flatformer.sh"
+  },
+  {
+    "name": "trt_build_remote_large_L4",
+    "type": "dag_template",
+    "description": "Build TRT engine (.plf) for Large model on remote Volc L4 GPU. Submits Volc task with L4 queue, clones lidar-dl feat_merge, runs L4-specific ONNX script + trtexec.",
+    "input_desc": "Model checkpoint path, Volc task params. Template: scripts/volc_trt_l4_template.yaml",
+    "output_desc": ".plf engine file (SCP to local, then upload to CloudML)",
+    "remote_host": "volc-l4",
+    "remote_path": "deploy/convert_onnx_det/convert_onnx_online_vrf_L4.py"
+  },
+  {
+    "name": "trt_build_remote_lite_L4",
+    "type": "dag_template",
+    "description": "Build TRT engine (.plf) for Lite model (S1) on remote Volc L4 GPU. Submits Volc task with L4 queue, clones lidar-dl dev_lit, runs L4-specific ONNX script + trtexec.",
+    "input_desc": "Model checkpoint path, Volc task params. Template: scripts/volc_trt_l4_template.yaml",
+    "output_desc": ".plf engine file (SCP to local, then upload to CloudML)",
+    "remote_host": "volc-l4",
+    "remote_path": "deploy/convert_onnx_det/convert_onnx_s1_c128_4b_s2_64_b1_vfe_vrf_L4.py"
+  },
+  {
+    "name": "add_flow_to_existing_frame_pkls",
+    "type": "data_script",
+    "description": "Add scene flow data to existing frame pkl files. Augments frames with flow vectors for motion estimation training.",
+    "input_desc": "Config: add_flow_to_existing_frame_pkls.yaml (input pkl, save_dir, num_workers)",
+    "output_desc": "Frame pkls augmented with flow data",
+    "remote_host": "root@localhost:3333",
+    "remote_path": "/high_perf_store3/l3_data/wuwenda/l3_deep/data/add_flow_to_existing_frame_pkls.py"
+  },
+  {
+    "name": "calculate_mapped_labels",
+    "type": "data_script",
+    "description": "Count labels after applying pt_seg_map_dict label remapping. Validates label distribution after mapping changes.",
+    "input_desc": "Config: calculate_mapped_labels.yaml (pkl_files list)",
+    "output_desc": "Label count statistics per class",
+    "remote_host": "root@localhost:3333",
+    "remote_path": "/high_perf_store3/l3_data/wuwenda/l3_deep/data/calculate_mapped_labels.py"
+  },
+  {
+    "name": "extract_frames_by_label",
+    "type": "data_script",
+    "description": "Extract or filter frames from pkl by label condition. Supports balanced selection with target_count.",
+    "input_desc": "Config: extract_frames_by_label.yaml (pkl path, target_count, user_condition)",
+    "output_desc": "Filtered pkl with matching frames",
+    "remote_host": "root@localhost:3333",
+    "remote_path": "/high_perf_store3/l3_data/wuwenda/l3_deep/data/extract_frames_by_label.py"
+  },
+  {
+    "name": "filter_ignore_pts_manually",
+    "type": "data_script",
+    "description": "Manually filter ignore-labeled points from pkl using edit rectangles JSON. For cleaning up annotation noise.",
+    "input_desc": "Config: filter_ignore_pts_manually.yaml (src_file, manual_file)",
+    "output_desc": "Cleaned pkl with ignore points removed",
+    "remote_host": "root@localhost:3333",
+    "remote_path": "/high_perf_store3/l3_data/wuwenda/l3_deep/data/filter_ignore_pts_manually.py"
+  },
+  {
+    "name": "find_bad_cp_samples",
+    "type": "data_script",
+    "description": "Find samples with suspicious Construction Pillar annotations. Compares model predictions against GT to identify annotation errors.",
+    "input_desc": "Config: find_bad_cp_samples.yaml (val_pkl, val_res_dir)",
+    "output_desc": "List of suspicious sample paths",
+    "remote_host": "root@localhost:3333",
+    "remote_path": "/high_perf_store3/l3_data/wuwenda/l3_deep/data/find_bad_cp_samples.py"
+  },
+  {
+    "name": "find_frames_in_dataclips",
+    "type": "data_script",
+    "description": "Find which frames appear in which dataclip pkl files. Cross-references multiple pkls to track frame provenance.",
+    "input_desc": "Config: find_frames_in_dataclips.yaml (pkl_paths list)",
+    "output_desc": "Frame-to-dataclip mapping",
+    "remote_host": "root@localhost:3333",
+    "remote_path": "/high_perf_store3/l3_data/wuwenda/l3_deep/data/find_frames_in_dataclips.py"
+  },
+  {
+    "name": "find_local_deppdata_fs_diff",
+    "type": "data_script",
+    "description": "Diff local FS annotations against deep-data platform versions. Detects annotation drift between dataset releases.",
+    "input_desc": "Config: find_local_deppdata_fs_diff.yaml (dataset_list)",
+    "output_desc": "Diff report of changed annotations",
+    "remote_host": "root@localhost:3333",
+    "remote_path": "/high_perf_store3/l3_data/wuwenda/l3_deep/data/find_local_deppdata_fs_diff.py"
+  },
+  {
+    "name": "find_unused_folders",
+    "type": "data_script",
+    "description": "Find data folders not referenced by any pkl file. Helps clean up unused data on remote storage.",
+    "input_desc": "Config: find_unused_folders.yaml (root_file, pkl_file_list)",
+    "output_desc": "List of unused folder paths",
+    "remote_host": "root@localhost:3333",
+    "remote_path": "/high_perf_store3/l3_data/wuwenda/l3_deep/data/find_unused_folders.py"
+  },
+  {
+    "name": "generate_training_pkl",
+    "type": "data_script",
+    "description": "Merge multiple data pkl files into a final training pkl with configurable sampling ratios. Core data pipeline tool for assembling training datasets.",
+    "input_desc": "Config: generate_training_pkl.yaml (train_data_list with paths and sampling ratios)",
+    "output_desc": "Merged training pkl file",
+    "remote_host": "root@localhost:3333",
+    "remote_path": "/high_perf_store3/l3_data/wuwenda/l3_deep/data/generate_training_pkl.py"
+  },
+  {
+    "name": "raw_L3_FS_anno_to_pkl",
+    "type": "data_script",
+    "description": "Convert raw L3 Free Space annotations to training pkl format. Processes FS segmentation labels from dataset versions.",
+    "input_desc": "Config: L3_FS_anno_to_pkl.yaml (dataset_list)",
+    "output_desc": "Training pkl files with FS segmentation labels",
+    "remote_host": "root@localhost:3333",
+    "remote_path": "/high_perf_store3/l3_data/wuwenda/l3_deep/data/raw_L3_FS_anno_to_pkl.py"
+  },
+  {
+    "name": "raw_L3_OD_anno_to_pkl",
+    "type": "data_script",
+    "description": "Convert raw L3 Object Detection annotations (JSON) to training pkl format. Parses annotation JSONs from dataset versions, extracts 3D bboxes, and outputs pickle files.",
+    "input_desc": "Config: L3_od_data_to_pkl.yaml (json_dir, dataset_list, num_threads)",
+    "output_desc": "Training pkl files with OD annotations",
+    "remote_host": "root@localhost:3333",
+    "remote_path": "/high_perf_store3/l3_data/wuwenda/l3_deep/data/raw_L3_OD_anno_to_pkl.py"
+  },
+  {
+    "name": "raw_anno_split_train_and_val_bin",
+    "type": "data_script",
+    "description": "Split raw annotation binary files into train and validation sets. Processes data folders with multi-threading.",
+    "input_desc": "Config: raw_anno_split_train_and_val_bin.yaml (data_folder, num_threads, output_dir)",
+    "output_desc": "Separate train/val pkl files",
+    "remote_host": "root@localhost:3333",
+    "remote_path": "/high_perf_store3/l3_data/wuwenda/l3_deep/data/raw_anno_split_train_and_val_bin.py"
+  },
+  {
+    "name": "raw_e2e_anno_to_pkl",
+    "type": "data_script",
+    "description": "Convert raw E2E (end-to-end) annotations to pkl format. Handles E2E FS barrier diagonal dataset conversion.",
+    "input_desc": "Config: L3_e2e_anno_to_pkl.yaml (pkl_dir, pkl_file_list, num_threads, output_dir)",
+    "output_desc": "E2E training pkl files",
+    "remote_host": "root@localhost:3333",
+    "remote_path": "/high_perf_store3/l3_data/wuwenda/l3_deep/data/raw_e2e_anno_to_pkl.py"
+  },
+  {
+    "name": "reproduce_ann_res",
+    "type": "data_script",
+    "description": "Reproduce annotation results for validation. Re-runs annotation pipeline to verify consistency.",
+    "input_desc": "Config: reproduce_ann_res.yaml (pkl_file)",
+    "output_desc": "Reproduced annotation results",
+    "remote_host": "root@localhost:3333",
+    "remote_path": "/high_perf_store3/l3_data/wuwenda/l3_deep/data/reproduce_ann_res.py"
+  },
+  {
+    "name": "split_underdog_data_pkl",
+    "type": "data_script",
+    "description": "Split underdog (hard example) data into separate pkl files. Used for hard example mining and targeted retraining.",
+    "input_desc": "Source pkl path (referenced in script via config/)",
+    "output_desc": "Split pkl files for hard examples",
+    "remote_host": "root@localhost:3333",
+    "remote_path": "/high_perf_store3/l3_data/wuwenda/l3_deep/data/split_underdog_data_pkl.py"
+  }
+]

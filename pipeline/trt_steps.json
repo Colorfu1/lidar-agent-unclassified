@@ -1,0 +1,11 @@
+{
+  "steps": [
+    { "id": "step1_convert_pth_to_onnx", "name": "Convert pth to onnx" },
+    { "id": "step2_build_trt_engine",    "name": "Build TRT engine" },
+    { "id": "step3_checkpoint_report",   "name": "Checkpoint compatibility report" },
+    { "id": "step4_parse_engine_output", "name": "Parse engine output" },
+    { "id": "step5_copy_engine_artifact","name": "Copy engine artifact" },
+    { "id": "step6_prepare_cloudml",     "name": "Prepare CloudML package" },
+    { "id": "step7_upload_cloudml",      "name": "Upload CloudML package" }
+  ]
+}

@@ -1,0 +1,66 @@
+# self define e.g text_classfication
+TaskName: "test_L4"
+# description for this task
+Description: ""
+# entry point command
+Entrypoint: "tail -f /high_perf_store3/l3_data/wuwenda/l3_deep/data/run_val_centerpoint_seg.txt"
+Tags: []
+# the code path you want to upload locally
+UserCodePath: ""
+# remote path mount in training container
+RemoteMountCodePath: ""
+# user define env var
+Envs:
+    - Name: "AD_CLOUD_DATASEEKER_KS3_ACCESS_KEY"
+      Value: ""
+    - Name: "AD_CLOUD_DATASEEKER_KS3_SECRET_KEY"
+      Value: ""
+    - Name: "XIAOMI_IAM_ACCESS_KEY_ID"
+      Value: ""
+    - Name: "XIAOMI_IAM_SECRET_ACCESS_KEY"
+      Value: ""
+    - Name: "AD_CLOUD_DATASEEKER_PROXY_ENV"
+      Value: "1"
+    - Name: "XIAOMI_USERNAME"
+      Value: "wuwenda"
+# queue created under Resource Group, empty as default queue
+ResourceQueueID: "q-20251216205836-jwdrs"
+# distributed framework, support: TensorFlow PS,PyTorch DDP,Horovod,BytePS
+Framework: "PyTorchDDP"
+TaskRoleSpecs:
+    - RoleName: "worker"
+      RoleReplicas: 1
+      Flavor: "ml.gni3.3xlarge"
+ActiveDeadlineSeconds: 864000
+# enable tensor board or not
+EnableTensorBoard: false
+# storages
+Storages:
+    - Type: "Vepfs"
+      MountPath: "/high_perf_store3/ad-cloud-data-cache"
+      VepfsId: "vepfs-cnbj0234bb93739d"
+      SubPath: "ad-cloud-data-cache"
+      ReadOnly: true
+    - Type: "Vepfs"
+      MountPath: "/high_perf_store3/l3_data"
+      VepfsId: "vepfs-cnbj0234bb93739d"
+      SubPath: "l3_data"
+ImageUrl: "test-lab-instance-cn-beijing.cr.volces.com/lidar-wwd/flatformer_wwd:latest"
+CacheType: "Cloudfs"
+# user define retry options
+RetryOptions:
+    EnableRetry: false
+    MaxRetryTimes: 5
+    IntervalSeconds: 120
+    PolicySets: []
+    EnableReserveResourceOnRetry: false
+# diagnosis options
+DiagOptions:
+    - Name: "EnvironmentalDiagnosis"
+      Enable: false
+    - Name: "PythonDetection"
+      Enable: false
+    - Name: "LogDetection"
+      Enable: false
+    - Name: "VecclHangDetection"
+      Enable: false

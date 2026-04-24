@@ -1,0 +1,25 @@
+name: "data_update_${date}"
+stages:
+  - id: detect_new_data
+    type: config_validate
+    inputs:
+      config_path: "${raw_data_path}"
+
+  - id: run_processing
+    type: run_scripts
+    depends_on: [detect_new_data]
+    inputs:
+      scripts: "${data_scripts}"
+      config: "${data_config_yaml}"
+
+  - id: validate_output
+    type: data_validate
+    depends_on: [run_processing]
+    inputs:
+      output_path: "${processed_data_dir}"
+
+  - id: notify_ready
+    type: notify
+    depends_on: [validate_output]
+    inputs:
+      message: "Dataset ${date} ready."

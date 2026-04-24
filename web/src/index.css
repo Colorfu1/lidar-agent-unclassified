@@ -1,0 +1,119 @@
+@import "tailwindcss";
+
+@theme {
+  --color-tesla-red: #e82127;
+  --color-tesla-red-hover: #ff2d33;
+  --color-surface: #17171c;
+  --color-surface-hover: #1f1f26;
+  --color-bg: #0b0b0f;
+  --color-border: #2a2a32;
+  --color-muted: #6b7280;
+  --font-sans: 'DM Sans', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+* {
+  font-family: var(--font-sans);
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: #d1d5db;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'cv11', 'ss01';
+  font-size: 13px;
+  line-height: 1.6;
+  letter-spacing: -0.011em;
+}
+
+code, pre, .font-mono {
+  font-family: var(--font-mono) !important;
+  font-size: 12px;
+  letter-spacing: 0;
+}
+
+h1, h2, h3 {
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  color: #f3f4f6;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+}
+
+::selection {
+  background: rgba(232, 33, 39, 0.3);
+  color: #fff;
+}
+
+/* Keep selection clearly visible on red user bubbles and dark chat input. */
+.chat-user-bubble ::selection {
+  background: #fde68a;
+  color: #111827;
+}
+
+.chat-user-bubble ::-moz-selection {
+  background: #fde68a;
+  color: #111827;
+}
+
+.chat-input::selection {
+  background: #e82127;
+  color: #fff;
+}
+
+.chat-input::-moz-selection {
+  background: #e82127;
+  color: #fff;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2a2a32;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3a3a44;
+}
+
+input, select, button, textarea {
+  font-family: var(--font-sans);
+  letter-spacing: -0.011em;
+}
+
+select option {
+  background: #17171c;
+  color: #d1d5db;
+}
+
+@keyframes trt-dot-pulse {
+  0%, 80%, 100% {
+    opacity: 0.5;
+    transform: scale(0.88);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.trt-floating-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  background: #e74b35;
+  animation: trt-dot-pulse 1.2s infinite ease-in-out;
+}

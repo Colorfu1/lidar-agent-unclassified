@@ -1,0 +1,53 @@
+name: "train_eval_${experiment_id}"
+stages:
+  - id: validate_config
+    type: config_validate
+    inputs:
+      config_path: "${config_path}"
+    fail_fast: true
+
+  - id: submit_train
+    type: volc_submit
+    depends_on: [validate_config]
+    inputs:
+      yaml_path: "${job_yaml}"
+      queue: "${queue_id}"
+      priority: 6
+
+  - id: monitor_train
+    type: volc_monitor
+    depends_on: [submit_train]
+    inputs:
+      task_id: "${submit_train.output.task_id}"
+      poll_interval: 300
+
+  - id: fetch_checkpoint
+    type: ssh_fetch
+    depends_on: [monitor_train]
+    inputs:
+      remote_path: "${work_dir}/latest.pth"
+
+  - id: submit_eval_od
+    type: volc_submit
+    depends_on: [fetch_checkpoint]
+    inputs:
+      yaml_path: "${eval_od_yaml}"
+
+  - id: submit_eval_fs
+    type: volc_submit
+    depends_on: [fetch_checkpoint]
+    inputs:
+      yaml_path: "${eval_fs_yaml}"
+
+  - id: fetch_results
+    type: result_collect
+    depends_on: [submit_eval_od, submit_eval_fs]
+    inputs:
+      od_result_path: "${eval_od_work_dir}/results.json"
+      fs_result_path: "${eval_fs_work_dir}/results.json"
+
+  - id: store_results
+    type: db_store
+    depends_on: [fetch_results]
+    inputs:
+      experiment_id: "${experiment_id}"

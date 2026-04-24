@@ -95,6 +95,8 @@ write_status "running" "$CURRENT_STEP"
 rm -rf /mmdet3d
 cp -r "$VEPFS_MMDET3D" /mmdet3d >> "$BUILD_LOG" 2>&1 || fail "cp -r failed"
 cd /mmdet3d || fail "no /mmdet3d after copy"
+git checkout -- . >> "$BUILD_LOG" 2>&1 || true
+git clean -fd >> "$BUILD_LOG" 2>&1 || true
 git checkout "$BRANCH" >> "$BUILD_LOG" 2>&1 || fail "branch $BRANCH not available"
 log "checked out $BRANCH ($(git log --oneline -1))"
 

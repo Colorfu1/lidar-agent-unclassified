@@ -1,6 +1,5 @@
 import express from "express";
 import expressWs from "express-ws";
-import { execFileSync } from "child_process";
 import path from "path";
 import { initRuntime } from "./agent/runtime.js";
 import { createDb } from "./db.js";
@@ -24,7 +23,7 @@ import { eventBus, type AppNotification } from "./events.js";
 import { startTrtBuildMonitor } from "./trt/monitor.js";
 
 const PORT = parseInt(process.env.PORT || "3000");
-const DB_PATH = process.env.DB_PATH || "./data/lidar-agent-unclassified.db";
+const DB_PATH = process.env.DB_PATH || "./data/lidar-agent.db";
 
 const db = createDb(DB_PATH);
 const mgr = new ExperimentManager(db);
@@ -33,59 +32,6 @@ const merger = new BranchMerger(process.env.MMDET3D_ROOT || "../mmdet3d");
 const toolDeps = { mgr, merger, bridge, db };
 const dataScheduler = new DataUpdateScheduler(db, bridge, path.resolve("pipeline"));
 startTrtBuildMonitor(db);
-
-function normalizeVersion(raw: string): string {
-  const v = raw.trim();
-  if (!v) return "";
-  return /^v/i.test(v) ? v : `v${v}`;
-}
-
-function normalizeIntentText(text: string): string {
-  return text
-    .trim()
-    .toLowerCase()
-    .replace(/[.!?]+$/g, "")
-    .replace(/\s+/g, " ");
-}
-
-function extractVersion(text: string): string | null {
-  const m = text.match(/\b(v?\d+(?:\.\d+){0,3})\b/i);
-  if (!m) return null;
-  return normalizeVersion(m[1]);
-}
-
-function isLikelyAffirmative(text: string): boolean {
-  const t = normalizeIntentText(text);
-  return /^(ok|okay|yes|y|it is ok|it's ok|its ok|looks good|go ahead|upload|confirm|fine|do it)$/i.test(t);
-}
-
-function isLikelyNegative(text: string): boolean {
-  const t = normalizeIntentText(text);
-  return /\b(no|n|skip|cancel|decline|stop upload|do not upload|don't upload|dont upload)\b/i.test(t);
-}
-
-function isLikelyUploadConfirmReply(text: string): boolean {
-  const t = text.trim();
-  if (!t) return false;
-  // Questions are never confirmations, even if they mention "upload" / "cloudml".
-  if (/\?/.test(t)) return false;
-  if (/\b(what|why|which|how|where|when|who|是什么|是啥|怎么|为什么|吗|呢)\b/i.test(t)) return false;
-  if (isLikelyAffirmative(t)) return true;
-  if (isLikelyNegative(t)) return true;
-  // Explicit upload directive, e.g. "upload v1.2.0", "go ahead and upload".
-  if (/\b(upload|cloud\s*-?\s*ml|cloudml)\b/i.test(t) && /\b(yes|ok|okay|go|do|confirm|please|now)\b/i.test(t)) return true;
-  if (/\bversion\s+v?\d/i.test(t) && /\b(upload|cloud\s*-?\s*ml|cloudml|confirm|yes|ok)\b/i.test(t)) return true;
-  return false;
-}
-
-function isLikelyBuildRequest(text: string): boolean {
-  const t = text.trim().toLowerCase();
-  if (!t) return false;
-  if (/\b(l4|trt|engine|checkpoint|vepfs|pth)\b/.test(t) && /\b(build|submit|start|retry|model)\b/.test(t)) return true;
-  if (/\.pth\b/.test(t)) return true;
-  if (/\bmodel\s+is\b/.test(t)) return true;
-  return false;
-}
 
 function extractBuildIdFromUploadConfirmBody(body: string): number | null {
   if (!body) return null;
@@ -102,51 +48,6 @@ function extractBuildIdFromUploadConfirmBody(body: string): number | null {
     if (Number.isFinite(id) && id > 0) return id;
   }
   return null;
-}
-
-function assistantClaimedToolCancellation(text: string): boolean {
-  return /\b(cancelled|canceled|not submitted|was not submitted|tool call was canceled|tool call was cancelled)\b/i.test(text);
-}
-
-function normalizeL4Checkpoint(checkpoint: string): string {
-  const vepfsPthBase = "/high_perf_store3/l3_data/wuwenda/centerpoint/pth_dir";
-  return checkpoint.startsWith("/") ? checkpoint : `${vepfsPthBase}/${checkpoint}`;
-}
-
-function buildL4AcceptedMessage(build: any): string {
-  const fields = [
-    `L4 TRT build is accepted by the backend.`,
-    `Build ID: #${build.id}`,
-    `Status: ${build.status}`,
-    build.task_id ? `Volc task: ${build.task_id}` : "Volc task: submitting in backend",
-    build.instance_id ? `Instance: ${build.instance_id}` : "",
-    build.remote_out_dir ? `Remote output: ${build.remote_out_dir}` : "",
-  ].filter(Boolean);
-  return `\n\nCorrection from backend state:\n${fields.map((f) => `- ${f}`).join("\n")}`;
-}
-
-function deriveL4BuildName(checkpoint: string): string {
-  const parts = checkpoint.split("/");
-  const parent = (parts[parts.length - 2] || "lite").replace(/[^A-Za-z0-9._-]+/g, "_");
-  const file = parts[parts.length - 1] || "model.pth";
-  const epoch = file.match(/epoch_(\d+)\.pth$/i);
-  if (epoch) return `${parent}_ep${epoch[1]}_L4`;
-  return `${parent}_${file.replace(/\.pth$/i, "")}_L4`;
-}
-
-function parseL4BuildRequest(text: string): { model: "lite" | "large"; checkpoint: string; name: string } | null {
-  const t = text.trim();
-  if (!t) return null;
-  if (!/\b(l4|trt|engine)\b/i.test(t) || !/\b(build|submit|start|retry)\b/i.test(t)) return null;
-
-  const modelMatch = t.match(/\bmodel\s*(?:is|=|:)?\s*["']?(lite|large)\b/i);
-  const ckptMatch = t.match(/(\/[A-Za-z0-9._\-\/]+\.pth|[A-Za-z0-9._\-\/]+\.pth)/i);
-  if (!modelMatch || !ckptMatch) return null;
-
-  const model = modelMatch[1].toLowerCase() as "lite" | "large";
-  const checkpoint = normalizeL4Checkpoint(ckptMatch[1]);
-  const name = deriveL4BuildName(checkpoint);
-  return { model, checkpoint, name };
 }
 
 const { app } = expressWs(express());
@@ -205,12 +106,6 @@ app.ws("/chat", (ws, _req) => {
   const getLatestPendingUpload = db.raw.prepare(
     "SELECT id, model, name, version, engine_path FROM trt_builds WHERE status = 'completed' AND upload_status = 'pending_confirm' ORDER BY id DESC LIMIT 1",
   );
-  const getLatestL4BuildAfter = db.raw.prepare(
-    "SELECT * FROM trt_builds WHERE id > ? AND platform = 'L4' ORDER BY id DESC LIMIT 1",
-  );
-  const getMatchingL4BuildAfter = db.raw.prepare(
-    "SELECT * FROM trt_builds WHERE id > ? AND platform = 'L4' AND model = ? AND checkpoint = ? ORDER BY id DESC LIMIT 1",
-  );
 
   ws.on("message", async (raw) => {
     try {
@@ -253,92 +148,24 @@ app.ws("/chat", (ws, _req) => {
         db.raw.prepare("UPDATE chat_sessions SET title = ? WHERE id = ?").run(title, currentSessionId);
       }
 
-      // Deterministic fast-path for explicit L4 build requests.
-      // This avoids Codex/MCP cancellation issues for task submission.
-      const directL4 = parseL4BuildRequest(msg.content);
-      if (directL4) {
-        const startArgs = [
-          "scripts/trt_build_l4_start.sh",
-          "--model",
-          directL4.model,
-          "--checkpoint",
-          directL4.checkpoint,
-          "--name",
-          directL4.name,
-        ];
-        try {
-          const out = execFileSync("bash", startArgs, {
-            cwd: path.resolve("."),
-            encoding: "utf-8",
-            env: process.env,
-          });
-          const buildIdMatch = out.match(/build_id=(\d+)/);
-          const taskIdMatch = out.match(/task_id=(t-\S+)/);
-          const outDirMatch = out.match(/out_dir=(.+)/);
-          const buildId = buildIdMatch ? Number(buildIdMatch[1]) : null;
-          const taskId = taskIdMatch ? taskIdMatch[1] : null;
-          const outDir = outDirMatch ? outDirMatch[1] : null;
-          const text = buildId
-            ? `L4 TRT build submitted via backend.\n- Build ID: #${buildId}\n- Task ID: ${taskId ?? "(pending)"}\n- Model: ${directL4.model}\n- Checkpoint: ${directL4.checkpoint}\n- Output: ${outDir ?? "(pending)"}`
-            : `L4 TRT build submit started via backend (task_id=${taskId ?? "unknown"}).`;
-          ws.send(JSON.stringify({ type: "tool_call", content: JSON.stringify({ name: "backend__trt_build_l4", input: directL4 }) }));
-          ws.send(JSON.stringify({ type: "text", content: text }));
-          ws.send(JSON.stringify({ type: "done", content: "" }));
-          insertMessage.run(currentSessionId, "tool", JSON.stringify({ name: "backend__trt_build_l4", input: directL4 }));
-          insertMessage.run(currentSessionId, "assistant", text);
-          return;
-        } catch (e: any) {
-          const errText = `Failed to submit L4 TRT build via backend: ${String(e?.stderr || e?.message || e)}`;
-          ws.send(JSON.stringify({ type: "error", content: errText }));
-          ws.send(JSON.stringify({ type: "done", content: "" }));
-          insertMessage.run(currentSessionId, "assistant", errText);
-          return;
-        }
-      }
-
+      // If a CloudML upload is pending confirmation, hint the agent so it knows
+      // which build_id the user is talking about. The agent decides preview vs
+      // execute vs decline from natural language per the system prompt.
       let effectiveUserPrompt = msg.content;
-      let pending: any = null;
       const hintedBuildId = wsPendingUploadBuild.get(ws);
-      if (hintedBuildId) {
-        pending = getPendingUploadById.get(hintedBuildId) as any;
-      }
-      if (!pending) {
-        pending = getLatestPendingUpload.get() as any;
-      }
-      if (pending && !isLikelyBuildRequest(msg.content) && isLikelyUploadConfirmReply(msg.content)) {
-        const defaultVersion = normalizeVersion(String(pending.version || "v1.0.0"));
-        const userVersion = extractVersion(msg.content);
-        const confirm = !isLikelyNegative(msg.content);
-        const buildId = Number(pending.id);
-        if (confirm) {
-          const execArgs = {
-            build_id: buildId,
-            version: userVersion || defaultVersion,
-            app_label: "ipc3090",
-          };
-          effectiveUserPrompt = [
-            "The user has explicitly confirmed the CloudML upload.",
-            `Pending build: #${buildId} (${pending.name || pending.model})`,
-            `User reply: "${msg.content}"`,
-            `Mapped execute args: ${JSON.stringify(execArgs)}`,
-            "Call cloudml_upload_execute immediately with these args and return the result.",
-            "Do not ask generic follow-up questions.",
-          ].join("\n");
-        } else {
-          effectiveUserPrompt = [
-            "The user has declined the CloudML upload.",
-            `Pending build: #${buildId} (${pending.name || pending.model})`,
-            `User reply: "${msg.content}"`,
-            `Call trt_decline_upload with {"build_id": ${buildId}} and return the result.`,
-            "Do not ask generic follow-up questions.",
-          ].join("\n");
-        }
-        wsPendingUploadBuild.delete(ws);
+      const pending: any =
+        (hintedBuildId && getPendingUploadById.get(hintedBuildId)) ||
+        getLatestPendingUpload.get();
+      if (pending) {
+        effectiveUserPrompt = [
+          `[context] A CloudML upload is pending confirmation: build #${pending.id} (${pending.name || pending.model}), default version ${pending.version || "v1.0.0"}.`,
+          "Follow the CloudML Upload rules in the system prompt: questions → cloudml_upload_preview; explicit confirmation → cloudml_upload_execute; decline → trt_decline_upload.",
+          "",
+          `User message: ${msg.content}`,
+        ].join("\n");
       }
 
       assistantBuffer = "";
-      const turnBuildFloor = Number((db.raw.prepare("SELECT COALESCE(MAX(id), 0) as id FROM trt_builds").get() as any).id);
-      let lastL4ToolInput: { model?: string; checkpoint?: string } | null = null;
 
       for await (const event of agentSession.chat(effectiveUserPrompt)) {
         if (event.type === "text") {
@@ -347,32 +174,9 @@ app.ws("/chat", (ws, _req) => {
         } else if (event.type === "tool_call") {
           ws.send(JSON.stringify(event));
           insertMessage.run(currentSessionId, "tool", event.content);
-          try {
-            const parsed = JSON.parse(event.content) as any;
-            if (parsed?.name === "mcp__lidar__trt_build_l4" && parsed.input) {
-              lastL4ToolInput = {
-                model: parsed.input.model,
-                checkpoint: parsed.input.checkpoint,
-              };
-            }
-          } catch {
-            // ignore malformed tool telemetry
-          }
         } else if (event.type === "tool_progress" || event.type === "tool_result" || event.type === "error") {
           ws.send(JSON.stringify(event));
         } else if (event.type === "done") {
-          if (lastL4ToolInput && assistantClaimedToolCancellation(assistantBuffer)) {
-            const checkpoint = lastL4ToolInput.checkpoint ? normalizeL4Checkpoint(lastL4ToolInput.checkpoint) : "";
-            const matching = checkpoint && lastL4ToolInput.model
-              ? getMatchingL4BuildAfter.get(turnBuildFloor, lastL4ToolInput.model, checkpoint)
-              : null;
-            const latest = matching || getLatestL4BuildAfter.get(turnBuildFloor);
-            if (latest) {
-              const correction = buildL4AcceptedMessage(latest);
-              ws.send(JSON.stringify({ type: "text", content: correction }));
-              assistantBuffer += correction;
-            }
-          }
           if (assistantBuffer) {
             insertMessage.run(currentSessionId, "assistant", assistantBuffer);
           }
@@ -392,5 +196,5 @@ app.ws("/chat", (ws, _req) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`lidar-agent-unclassified listening on :${PORT}`);
+  console.log(`lidar-agent listening on :${PORT}`);
 });

@@ -162,53 +162,69 @@ function buildCloudmlConfirmTemplate(build: any, appLabel = "ipc3090"): CloudmlC
   };
 }
 
-function submitL4BuildInBackground(db: Db, buildId: number, args: { model: string; checkpoint: string; name: string }): void {
-  const submitLogPath = path.join(ensureRuntimeLogDir(), `trt-build-${buildId}.l4-submit.log`);
-  const submitArgs = ["scripts/trt_build_l4_submit.py", "--model", args.model, "--checkpoint", args.checkpoint, "--name", args.name];
-  const child = execFile(
-    "python3",
-    submitArgs,
-    {
-      cwd: path.resolve("."),
-      env: process.env,
-      timeout: 120000,
-      maxBuffer: 1024 * 1024,
-    },
-    (error, stdout, stderr) => {
-      const combined = `${stdout || ""}${stderr ? `\n${stderr}` : ""}`;
-      try {
-        fs.writeFileSync(submitLogPath, combined || String(error ?? ""), "utf-8");
-      } catch {
-        // ignore log write failures
-      }
+function submitL4Build(db: Db, buildId: number, args: { model: string; checkpoint: string; name: string }): Promise<{ taskId: string; outDir: string }> {
+  return new Promise((resolve, reject) => {
+    const submitLogPath = path.join(ensureRuntimeLogDir(), `trt-build-${buildId}.l4-submit.log`);
+    const submitArgs = ["scripts/trt_build_l4_submit.py", "--model", args.model, "--checkpoint", args.checkpoint, "--name", args.name];
+    execFile(
+      "python3",
+      submitArgs,
+      {
+        cwd: path.resolve("."),
+        env: process.env,
+        timeout: 120000,
+        maxBuffer: 1024 * 1024,
+      },
+      (error, stdout, stderr) => {
+        const combined = `${stdout || ""}${stderr ? `\n${stderr}` : ""}`;
+        try {
+          fs.writeFileSync(submitLogPath, combined || String(error ?? ""), "utf-8");
+        } catch {
+          // ignore log write failures
+        }
 
+        if (error) {
+          db.raw
+            .prepare("UPDATE trt_builds SET status = 'failed', completed_at = datetime('now') WHERE id = ? AND status = 'running'")
+            .run(buildId);
+          notify("TRT Build Failed", `L4 build #${buildId} submit failed. Check ${submitLogPath}`, "error");
+          reject(new Error(`L4 submit failed: ${String(error)}`));
+          return;
+        }
+
+        const taskIdMatch = combined.match(/^task_id=(t-\S+)/m);
+        const outDirMatch = combined.match(/^out_dir=(.+)$/m);
+        const taskId = taskIdMatch ? taskIdMatch[1].trim() : "";
+        const outDir = outDirMatch ? outDirMatch[1].trim() : "";
+        if (!taskId) {
+          db.raw
+            .prepare("UPDATE trt_builds SET status = 'failed', completed_at = datetime('now') WHERE id = ? AND status = 'running'")
+            .run(buildId);
+          notify("TRT Build Failed", `L4 build #${buildId} submit returned no task_id. Check ${submitLogPath}`, "error");
+          reject(new Error(`L4 submit returned no task_id`));
+          return;
+        }
+
+        db.raw
+          .prepare("UPDATE trt_builds SET task_id = ?, remote_out_dir = ? WHERE id = ? AND status = 'running'")
+          .run(taskId, outDir || null, buildId);
+        notify("TRT Build Step", `L4 build #${buildId} submitted to Volc task_id=${taskId}`, "info");
+        resolve({ taskId, outDir });
+      },
+    );
+  });
+}
+
+function runShellAsync(command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; timeout?: number }): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { ...options, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
       if (error) {
-        db.raw
-          .prepare("UPDATE trt_builds SET status = 'failed', completed_at = datetime('now') WHERE id = ? AND status = 'running'")
-          .run(buildId);
-        notify("TRT Build Failed", `L4 build #${buildId} submit failed. Check ${submitLogPath}`, "error");
-        return;
+        reject(Object.assign(error, { stderr: stderr || "", stdout: stdout || "" }));
+      } else {
+        resolve(stdout || "");
       }
-
-      const taskIdMatch = combined.match(/^task_id=(t-\S+)/m);
-      const outDirMatch = combined.match(/^out_dir=(.+)$/m);
-      const taskId = taskIdMatch ? taskIdMatch[1].trim() : "";
-      const outDir = outDirMatch ? outDirMatch[1].trim() : "";
-      if (!taskId) {
-        db.raw
-          .prepare("UPDATE trt_builds SET status = 'failed', completed_at = datetime('now') WHERE id = ? AND status = 'running'")
-          .run(buildId);
-        notify("TRT Build Failed", `L4 build #${buildId} submit returned no task_id. Check ${submitLogPath}`, "error");
-        return;
-      }
-
-      db.raw
-        .prepare("UPDATE trt_builds SET task_id = ?, remote_out_dir = ? WHERE id = ? AND status = 'running'")
-        .run(taskId, outDir || null, buildId);
-      notify("TRT Build Step", `L4 build #${buildId} submitted to Volc task_id=${taskId}`, "info");
-    },
-  );
-  child.unref();
+    });
+  });
 }
 
 export function createAgentTools(deps: ToolDeps) {
@@ -445,29 +461,36 @@ export function createAgentTools(deps: ToolDeps) {
         };
       }
 
-      const startArgs = ["scripts/trt_build_start.sh", "--model", args.model, "--checkpoint", resolvedCheckpoint, "--detach"];
+      const startArgs = ["scripts/trt_build_start.sh", "--model", args.model, "--checkpoint", resolvedCheckpoint];
       if (args.name) startArgs.push("--name", args.name);
       try {
-        const out = execFileSync("bash", startArgs, {
+        const out = await runShellAsync("bash", startArgs, {
           cwd: path.resolve("."),
-          encoding: "utf-8",
           env: process.env,
+          timeout: 30 * 60 * 1000,
         });
         const buildIdMatch = out.match(/build_id=(\d+)/);
+        const buildId = buildIdMatch ? Number(buildIdMatch[1]) : null;
+        const success = /TRT build completed/i.test(out);
+        return {
+          content: [{
+            type: "text" as const,
+            text: buildId
+              ? `TRT build #${buildId} ${success ? "completed" : "finished"} (${args.model}).`
+              : `TRT build ${success ? "completed" : "finished"} (${args.model}).`,
+          }],
+        };
+      } catch (e: any) {
+        const stderr = e?.stderr || "";
+        const stdout = e?.stdout || "";
+        const buildIdMatch = (stdout + stderr).match(/build_id=(\d+)/);
         const buildId = buildIdMatch ? Number(buildIdMatch[1]) : null;
         return {
           content: [{
             type: "text" as const,
             text: buildId
-              ? `TRT build #${buildId} started (${args.model}). I will monitor step status and heartbeat until completion/failure.`
-              : `TRT build started (${args.model}). I will monitor step status and heartbeat until completion/failure.`,
-          }],
-        };
-      } catch (e: any) {
-        return {
-          content: [{
-            type: "text" as const,
-            text: `Failed to start TRT build: ${String(e?.stderr || e?.message || e)}`,
+              ? `TRT build #${buildId} failed (${args.model}): ${String(e?.message || e)}`
+              : `Failed to run TRT build: ${String(e?.stderr || e?.message || e)}`,
           }],
           isError: true,
         };
@@ -500,18 +523,18 @@ export function createAgentTools(deps: ToolDeps) {
           )
           .run(args.model, checkpoint, name);
         const buildId = Number(result.lastInsertRowid);
-        submitL4BuildInBackground(db, buildId, { model: args.model, checkpoint, name });
+        const { taskId, outDir } = await submitL4Build(db, buildId, { model: args.model, checkpoint, name });
         return {
           content: [{
             type: "text" as const,
-            text: `L4 TRT build #${buildId} accepted locally (model=${args.model}). Volc submission is running in the backend; I will notify with task_id when accepted and then monitor until completion/failure.`,
+            text: `L4 TRT build #${buildId} submitted (model=${args.model}, task_id=${taskId}${outDir ? `, out_dir=${outDir}` : ""}). The remote Volc task is now running.`,
           }],
         };
       } catch (e: any) {
         return {
           content: [{
             type: "text" as const,
-            text: `Failed to submit L4 TRT build: ${String(e?.stderr || e?.message || e)}`,
+            text: `Failed to submit L4 TRT build: ${String(e?.message || e)}`,
           }],
           isError: true,
         };

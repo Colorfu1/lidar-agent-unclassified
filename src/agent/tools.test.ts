@@ -4,7 +4,7 @@ import { createDb, type Db } from "../db.js";
 import { ExperimentManager } from "../experiment/manager.js";
 import fs from "fs";
 
-const TEST_DB = "/tmp/lidar-agent-unclassified-tools-test.db";
+const TEST_DB = "/tmp/lidar-agent-tools-test.db";
 
 describe("agent tools", () => {
   let db: Db;

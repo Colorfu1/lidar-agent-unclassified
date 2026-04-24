@@ -13,7 +13,7 @@ set -euo pipefail
 #     --detach
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-DB_PATH="${DB_PATH:-$PROJECT_DIR/data/lidar-agent-unclassified.db}"
+DB_PATH="${DB_PATH:-$PROJECT_DIR/data/lidar-agent.db}"
 RUNTIME_LOG_DIR="$PROJECT_DIR/data/runtime-logs"
 ENGINE_BASE_3090="/home/mi/data/det_and_seg/3090/flatformer_at720_v3"
 

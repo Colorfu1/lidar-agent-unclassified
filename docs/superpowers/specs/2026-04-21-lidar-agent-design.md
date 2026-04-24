@@ -2,7 +2,7 @@
 
 **Date**: 2026-04-21
 **Status**: Approved
-**Location**: `/home/mi/codes/workspace/lidar-agent-unclassified/`
+**Location**: `/home/mi/codes/workspace/lidar-agent/`
 
 ---
 
@@ -96,7 +96,7 @@ The Agent Service communicates with the Pipeline Executor by spawning Python as 
 ## 4. Project Structure
 
 ```
-/home/mi/codes/workspace/lidar-agent-unclassified/
+/home/mi/codes/workspace/lidar-agent/
 ├── package.json
 ├── tsconfig.json
 ├── .env                         # API keys, DB path, remote SSH config
@@ -162,7 +162,7 @@ The Agent Service communicates with the Pipeline Executor by spawning Python as 
 │
 └── docs/
     └── superpowers/specs/
-        └── 2026-04-21-lidar-agent-unclassified-design.md  # This file
+        └── 2026-04-21-lidar-agent-design.md  # This file
 ```
 
 ## 5. Agent Tools

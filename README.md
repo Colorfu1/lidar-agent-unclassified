@@ -1,6 +1,6 @@
-# lidar-agent-unclassified (Unclassified)
+# lidar-agent
 
-`lidar-agent-unclassified` is a local web app + chat agent for LiDAR experiment operations, with a strong focus on TRT engine conversion and CloudML upload flow.
+`lidar-agent` is a local web app + chat agent for LiDAR experiment operations, with a strong focus on TRT engine conversion and CloudML upload flow.
 
 This document is written as an onboarding and takeover guide so a new development session can continue work quickly.
 
@@ -99,7 +99,7 @@ Prerequisites:
 Install:
 
 ```bash
-cd /home/mi/codes/workspace/lidar-agent-unclassified
+cd /home/mi/codes/workspace/lidar-agent
 npm install
 cd web && npm install
 ```
@@ -119,14 +119,14 @@ curl -fsSI http://localhost:5173/ | head -n 1
 
 Logs:
 
-- Backend: `/tmp/lidar-agent-unclassified-backend.log`
-- Frontend: `/tmp/lidar-agent-unclassified-frontend.log`
+- Backend: `/tmp/lidar-agent-backend.log`
+- Frontend: `/tmp/lidar-agent-frontend.log`
 
 ## 6) Database and state
 
 DB file:
 
-- `data/lidar-agent-unclassified.db`
+- `data/lidar-agent.db`
 
 Important tables:
 
@@ -144,7 +144,7 @@ Build state fields to watch:
 Useful query:
 
 ```bash
-sqlite3 data/lidar-agent-unclassified.db "SELECT id,model,name,status,upload_status,version,engine_path,started_at,completed_at FROM trt_builds ORDER BY id DESC LIMIT 20;"
+sqlite3 data/lidar-agent.db "SELECT id,model,name,status,upload_status,version,engine_path,started_at,completed_at FROM trt_builds ORDER BY id DESC LIMIT 20;"
 ```
 
 ## 7) Project map (where to start)
@@ -186,8 +186,8 @@ CloudML scripts:
 Reference docs:
 
 - `docs/trt-engine-build-pipeline.md`
-- `docs/superpowers/specs/2026-04-21-lidar-agent-unclassified-design.md`
-- `docs/superpowers/plans/2026-04-23-lidar-agent-unclassified-plan.md`
+- `docs/superpowers/specs/2026-04-21-lidar-agent-design.md`
+- `docs/superpowers/plans/2026-04-23-lidar-agent-plan.md`
 
 ## 8) Known issues (current)
 

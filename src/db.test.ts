@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createDb, type Db } from "./db.js";
 import fs from "fs";
 
-const TEST_DB = "/tmp/lidar-agent-unclassified-test.db";
+const TEST_DB = "/tmp/lidar-agent-test.db";
 
 describe("db", () => {
   let db: Db;

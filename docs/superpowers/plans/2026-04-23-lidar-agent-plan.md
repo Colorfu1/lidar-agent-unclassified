@@ -23,7 +23,7 @@
 - [ ] **Step 1: Initialize package.json**
 
 ```bash
-cd /home/mi/codes/workspace/lidar-agent-unclassified
+cd /home/mi/codes/workspace/lidar-agent
 npm init -y
 ```
 
@@ -31,7 +31,7 @@ Then edit `package.json`:
 
 ```json
 {
-  "name": "lidar-agent-unclassified",
+  "name": "lidar-agent",
   "version": "0.1.0",
   "type": "module",
   "scripts": {
@@ -74,7 +74,7 @@ npm install -D typescript tsx @types/node @types/express @types/better-sqlite3 @
 `.env.example`:
 ```
 ANTHROPIC_API_KEY=sk-...
-DB_PATH=./data/lidar-agent-unclassified.db
+DB_PATH=./data/lidar-agent.db
 SSH_HOST=root@localhost
 SSH_PORT=3333
 MMDET3D_PATH=../mmdet3d
@@ -139,7 +139,7 @@ Expected: Server starts on :3000, `GET /health` returns `{"status":"ok"}`.
 ```bash
 git init
 git add -A
-git commit -m "feat: initialize lidar-agent-unclassified Node.js project"
+git commit -m "feat: initialize lidar-agent Node.js project"
 ```
 
 ---
@@ -235,7 +235,7 @@ let db: Database.Database;
 export function getDb(): Database.Database {
   if (db) return db;
 
-  const dbPath = process.env.DB_PATH || "./data/lidar-agent-unclassified.db";
+  const dbPath = process.env.DB_PATH || "./data/lidar-agent.db";
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
   db = new Database(dbPath);
@@ -332,7 +332,7 @@ logger.info("Database initialized");
 ```bash
 npm run dev
 ```
-Expected: "Database initialized" in logs, `data/lidar-agent-unclassified.db` file created.
+Expected: "Database initialized" in logs, `data/lidar-agent.db` file created.
 
 - [ ] **Step 4: Commit**
 
@@ -2060,7 +2060,7 @@ git commit -m "feat: add REST + WebSocket routes — chat, experiments, pipeline
 - [ ] **Step 1: Scaffold Vite React project**
 
 ```bash
-cd /home/mi/codes/workspace/lidar-agent-unclassified
+cd /home/mi/codes/workspace/lidar-agent
 npm create vite@latest web -- --template react-ts
 cd web
 npm install
@@ -2140,7 +2140,7 @@ export default function App() {
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /home/mi/codes/workspace/lidar-agent-unclassified
+cd /home/mi/codes/workspace/lidar-agent
 git add web/
 git commit -m "feat: scaffold React frontend with routing and API proxy"
 ```
@@ -2516,5 +2516,5 @@ Verify it shows on Dashboard page.
 
 ```bash
 git add -A
-git commit -m "feat: lidar-agent-unclassified v0.1 — agent service, pipeline executor, web UI"
+git commit -m "feat: lidar-agent v0.1 — agent service, pipeline executor, web UI"
 ```

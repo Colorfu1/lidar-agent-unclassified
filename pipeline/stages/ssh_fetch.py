@@ -8,7 +8,7 @@ from stages.base import Stage
 class SSHFetchStage(Stage):
     def run(self) -> dict[str, Any]:
         remote_path = self.inputs["remote_path"]
-        local_dir = self.inputs.get("local_dir", "/tmp/lidar-agent-unclassified-fetch")
+        local_dir = self.inputs.get("local_dir", "/tmp/lidar-agent-fetch")
         os.makedirs(local_dir, exist_ok=True)
 
         ssh_host = os.environ.get("SSH_HOST", "root@localhost")

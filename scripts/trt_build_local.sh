@@ -204,8 +204,8 @@ if [ -z "$MODEL_NAME" ]; then
   MODEL_NAME="$MODEL"
 fi
 
-ENGINE_OUTPUT_DIR="$ENGINE_BASE_3090/$MODEL_NAME"
 ARTIFACT_STEM="$(derive_artifact_stem_from_checkpoint "$CHECKPOINT")"
+ENGINE_OUTPUT_DIR="$ENGINE_BASE_3090/$MODEL_NAME/$ARTIFACT_STEM"
 status_init
 
 # Validate early: --version is required for CloudML upload (no metadata.json in fresh output dir)
@@ -236,9 +236,9 @@ docker exec "$DOCKER" bash -c "
   fi
 "
 
-# 2. Ensure correct branch
+# 2. Ensure correct branch (discard local changes to avoid checkout conflicts)
 docker exec "$DOCKER" bash -c "
-  cd /mmdet3d && git fetch origin && git checkout $BRANCH && git pull origin $BRANCH
+  cd /mmdet3d && git fetch origin && git checkout -- . && git clean -fd && git checkout $BRANCH && git pull origin $BRANCH
 "
 
 # 3. Ensure mmdet3d is installed with CUDA ops compiled

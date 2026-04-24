@@ -8,7 +8,7 @@
 
 **Tech Stack:** Node.js 24, TypeScript, Express, express-ws, better-sqlite3, @anthropic-ai/claude-agent-sdk, zod, React 18, Vite, Python 3.12, PyYAML
 
-**Spec:** `docs/superpowers/specs/2026-04-21-lidar-agent-unclassified-design.md`
+**Spec:** `docs/superpowers/specs/2026-04-21-lidar-agent-design.md`
 
 ---
 
@@ -85,7 +85,7 @@
 
 ```json
 {
-  "name": "lidar-agent-unclassified",
+  "name": "lidar-agent",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -138,7 +138,7 @@
 `.env.example`:
 ```
 ANTHROPIC_API_KEY=sk-ant-...
-DB_PATH=./data/lidar-agent-unclassified.db
+DB_PATH=./data/lidar-agent.db
 MMDET3D_ROOT=../mmdet3d
 SSH_HOST=root@localhost
 SSH_PORT=3333
@@ -171,14 +171,14 @@ app.get("/health", (_req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`lidar-agent-unclassified listening on :${PORT}`);
+  console.log(`lidar-agent listening on :${PORT}`);
 });
 ```
 
 - [ ] **Step 5: Install dependencies and verify**
 
 ```bash
-cd /home/mi/codes/workspace/lidar-agent-unclassified && npm install
+cd /home/mi/codes/workspace/lidar-agent && npm install
 npx tsx src/index.ts &
 sleep 1
 curl http://localhost:3000/health
@@ -409,7 +409,7 @@ if __name__ == "__main__":
 - [ ] **Step 5: Test executor imports**
 
 ```bash
-cd /home/mi/codes/workspace/lidar-agent-unclassified/pipeline
+cd /home/mi/codes/workspace/lidar-agent/pipeline
 pip install -r requirements.txt
 python -c "from executor import load_dag, topological_sort; print('OK')"
 ```
@@ -433,7 +433,7 @@ git commit -m "feat: add Python pipeline executor with DAG runner and bridge pro
 - [ ] **Step 1: Scaffold Vite React TypeScript project**
 
 ```bash
-cd /home/mi/codes/workspace/lidar-agent-unclassified
+cd /home/mi/codes/workspace/lidar-agent
 npm create vite@latest web -- --template react-ts
 cd web && npm install
 npm install react-router-dom recharts
@@ -506,7 +506,7 @@ export function createChatSocket(): WebSocket {
 - [ ] **Step 4: Verify frontend starts**
 
 ```bash
-cd /home/mi/codes/workspace/lidar-agent-unclassified/web && npm run dev -- --host &
+cd /home/mi/codes/workspace/lidar-agent/web && npm run dev -- --host &
 sleep 3
 curl -s http://localhost:5173 | head -5
 kill %1
@@ -557,7 +557,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createDb, type Db } from "./db.js";
 import fs from "fs";
 
-const TEST_DB = "/tmp/lidar-agent-unclassified-test.db";
+const TEST_DB = "/tmp/lidar-agent-test.db";
 
 describe("db", () => {
   let db: Db;
@@ -600,7 +600,7 @@ describe("db", () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cd /home/mi/codes/workspace/lidar-agent-unclassified && npx vitest run src/db.test.ts
+cd /home/mi/codes/workspace/lidar-agent && npx vitest run src/db.test.ts
 ```
 
 Expected: FAIL — `createDb` not found.
@@ -733,7 +733,7 @@ import { createDb, type Db } from "../db.js";
 import { ExperimentManager } from "./manager.js";
 import fs from "fs";
 
-const TEST_DB = "/tmp/lidar-agent-unclassified-exp-test.db";
+const TEST_DB = "/tmp/lidar-agent-exp-test.db";
 
 describe("ExperimentManager", () => {
   let db: Db;
@@ -1129,7 +1129,7 @@ import { createDb, type Db } from "../db.js";
 import { ExperimentManager } from "../experiment/manager.js";
 import fs from "fs";
 
-const TEST_DB = "/tmp/lidar-agent-unclassified-tools-test.db";
+const TEST_DB = "/tmp/lidar-agent-tools-test.db";
 
 describe("agent tools", () => {
   let db: Db;
@@ -1331,7 +1331,7 @@ import { createDb } from "../db.js";
 import { ExperimentManager } from "../experiment/manager.js";
 import fs from "fs";
 
-const TEST_DB = "/tmp/lidar-agent-unclassified-session-test.db";
+const TEST_DB = "/tmp/lidar-agent-session-test.db";
 
 describe("AgentSession", () => {
   it("constructs with required dependencies", () => {
@@ -1553,7 +1553,7 @@ import { pipelineRoutes } from "./routes/pipeline.js";
 import path from "path";
 
 const PORT = parseInt(process.env.PORT || "3000");
-const DB_PATH = process.env.DB_PATH || "./data/lidar-agent-unclassified.db";
+const DB_PATH = process.env.DB_PATH || "./data/lidar-agent.db";
 
 const db = createDb(DB_PATH);
 const mgr = new ExperimentManager(db);
@@ -1583,21 +1583,21 @@ app.ws("/chat", (ws, _req) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`lidar-agent-unclassified listening on :${PORT}`);
+  console.log(`lidar-agent listening on :${PORT}`);
 });
 ```
 
 - [ ] **Step 4: Create data directory for DB**
 
 ```bash
-mkdir -p /home/mi/codes/workspace/lidar-agent-unclassified/data
-touch /home/mi/codes/workspace/lidar-agent-unclassified/data/.gitkeep
+mkdir -p /home/mi/codes/workspace/lidar-agent/data
+touch /home/mi/codes/workspace/lidar-agent/data/.gitkeep
 ```
 
 - [ ] **Step 5: Verify server starts**
 
 ```bash
-cd /home/mi/codes/workspace/lidar-agent-unclassified
+cd /home/mi/codes/workspace/lidar-agent
 npx tsx src/index.ts &
 sleep 2
 curl http://localhost:3000/health
@@ -1720,7 +1720,7 @@ from stages.base import Stage
 class SSHFetchStage(Stage):
     def run(self) -> dict[str, Any]:
         remote_path = self.inputs["remote_path"]
-        local_dir = self.inputs.get("local_dir", "/tmp/lidar-agent-unclassified-fetch")
+        local_dir = self.inputs.get("local_dir", "/tmp/lidar-agent-fetch")
         os.makedirs(local_dir, exist_ok=True)
 
         ssh_host = os.environ.get("SSH_HOST", "root@localhost")
@@ -1844,7 +1844,7 @@ stages:
 - [ ] **Step 8: Test imports**
 
 ```bash
-cd /home/mi/codes/workspace/lidar-agent-unclassified/pipeline
+cd /home/mi/codes/workspace/lidar-agent/pipeline
 python -c "from executor import STAGE_REGISTRY; print(list(STAGE_REGISTRY.keys()))"
 ```
 
@@ -2783,7 +2783,7 @@ Verify all routes point to real page components (no placeholders remain):
 - [ ] **Step 3: Run all tests**
 
 ```bash
-cd /home/mi/codes/workspace/lidar-agent-unclassified && npx vitest run
+cd /home/mi/codes/workspace/lidar-agent && npx vitest run
 ```
 
 Expected: All tests pass.
@@ -2812,7 +2812,7 @@ Expected: All return valid JSON (empty arrays for fresh DB).
 
 ```bash
 git add -A
-git commit -m "feat: complete lidar-agent-unclassified MVP — agent service, pipeline executor, and React UI"
+git commit -m "feat: complete lidar-agent MVP — agent service, pipeline executor, and React UI"
 ```
 
 ---

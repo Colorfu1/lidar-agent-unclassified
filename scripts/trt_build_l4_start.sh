@@ -6,7 +6,7 @@ set -euo pipefail
 # build_id so the chat-side monitor can poll volc logs/status.
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-DB_PATH="${DB_PATH:-$PROJECT_DIR/data/lidar-agent-unclassified.db}"
+DB_PATH="${DB_PATH:-$PROJECT_DIR/data/lidar-agent.db}"
 
 MODEL=""
 CHECKPOINT=""

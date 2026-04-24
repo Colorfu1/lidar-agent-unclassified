@@ -8,7 +8,7 @@ A hybrid LLM agent + deterministic pipeline system for LiDAR multi-task model tr
 
 ## Design Spec
 
-Full spec: `docs/superpowers/specs/2026-04-21-lidar-agent-unclassified-design.md`
+Full spec: `docs/superpowers/specs/2026-04-21-lidar-agent-design.md`
 Implementation plan: `docs/superpowers/plans/` (see active plan)
 
 ## Architecture
@@ -77,7 +77,7 @@ Key gotchas:
 ## Project Structure
 
 ```
-lidar-agent-unclassified/
+lidar-agent/
 ├── package.json          # Agent Service deps
 ├── tsconfig.json
 ├── .env                  # DB_PATH, Codex/model overrides, SSH config

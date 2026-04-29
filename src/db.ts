@@ -133,6 +133,17 @@ const SCHEMA = `
     synced_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS dataset_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    config TEXT,
+    status TEXT NOT NULL DEFAULT 'running',
+    remote_path TEXT,
+    pid INTEGER,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at TEXT
+  );
+
   CREATE TABLE IF NOT EXISTS trt_builds (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     model TEXT NOT NULL,
@@ -166,6 +177,33 @@ function seedTools(raw: Database.Database): void {
   console.log(`Seeded ${tools.length} tools from ${seedPath}`);
 }
 
+function seedDatasets(raw: Database.Database): void {
+  const count = (raw.prepare("SELECT COUNT(*) as c FROM datasets").get() as any).c;
+  if (count > 0) return;
+
+  const trainPkls = [
+    "/high_perf_store3/l3_data/wuwenda/l3_deep/fs_od/mix_L3_fs_at720/train_seg_oldL220wwoignore20w_at128od10w_at720od15w_at128fs30w_at720fs22w_aebod10w_target52k_0310.pkl",
+    "/high_perf_store3/l3_data/wuwenda/l3_deep/fs_od/mix_L3_fs_at720/train_seg_for_ground_260127.pkl",
+    "/high_perf_store3/l3_data/wuwenda/l3_deep/fs_od/mix_L3_fs_at720/at720_target_fs_0206_obstacle_in_lane_676.pkl",
+    "/high_perf_store3/l3_data/wuwenda/l3_deep/fs_od/mix_L3_fs_at720/at720_fs_0206_obstacle_in_lane_7368.pkl",
+    "/high_perf_store3/l3_data/wuwenda/l3_deep/fs_od/mix_L3_fs_at720/at720_target_fs_0206_noise.pkl",
+    "/high_perf_store3/l3_data/wuwenda/l3_deep/fs_od/mix_L3_fs_at720/under_bridge_72_ignore.pkl",
+  ];
+  const valPkls = [
+    "/high_perf_store3/l3_data/wuwenda/l3_deep/fs_od/mix_at_pandar_fixed_anno_file/val_seg.pkl",
+    "/high_perf_store3/l3_data/wuwenda/l3_deep/fs_od/mix_L3_od_0430/val_od_89k.pkl",
+    "/high_perf_store3/l3_data/wuwenda/l3_deep/fs_od/val_datasets/val_seg_L3_at720_27k.pkl",
+    "/high_perf_store3/l3_data/wuwenda/l3_deep/fs_od/mix_L3_od_at720/val_seg_2w.pkl",
+  ];
+
+  const insert = raw.prepare(`
+    INSERT INTO datasets (name, role, remote_path, pkl_files_json, synced_at)
+    VALUES (?, ?, ?, ?, datetime('now'))
+  `);
+  insert.run("Training Set", "train", "/high_perf_store3/l3_data/wuwenda/l3_deep/fs_od", JSON.stringify(trainPkls));
+  insert.run("Validation Set", "val", "/high_perf_store3/l3_data/wuwenda/l3_deep/fs_od", JSON.stringify(valPkls));
+}
+
 function ensureColumn(raw: Database.Database, table: string, columnDef: string): void {
   const columnName = columnDef.trim().split(/\s+/)[0];
   const cols = raw.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
@@ -185,7 +223,20 @@ export function createDb(dbPath: string): Db {
   ensureColumn(raw, "trt_builds", "task_id TEXT");
   ensureColumn(raw, "trt_builds", "instance_id TEXT");
   ensureColumn(raw, "trt_builds", "remote_out_dir TEXT");
+  ensureColumn(raw, "datasets", "role TEXT");
+  ensureColumn(raw, "datasets", "pkl_files_json TEXT");
+  ensureColumn(raw, "dataset_jobs", "task_type TEXT");
+  ensureColumn(raw, "dataset_jobs", "new_version TEXT");
+  ensureColumn(raw, "dataset_jobs", "old_version TEXT");
+  ensureColumn(raw, "dataset_jobs", "step TEXT DEFAULT 'anno_to_pkl'");
+  ensureColumn(raw, "dataset_jobs", "remote_pid INTEGER");
+  ensureColumn(raw, "dataset_jobs", "sensor_type TEXT");
+  ensureColumn(raw, "dataset_jobs", "output_dir TEXT");
+  ensureColumn(raw, "dataset_jobs", "manifest_pkl TEXT");
+  ensureColumn(raw, "dataset_jobs", "log_path TEXT");
+  ensureColumn(raw, "dataset_jobs", "skip_voxel INTEGER DEFAULT 0");
   seedTools(raw);
+  seedDatasets(raw);
   return {
     raw,
     close() {

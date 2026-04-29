@@ -28,8 +28,8 @@ function prepareCodexHome(): string {
       [
         `model = "${process.env.AGENT_MODEL || "gpt-5.4"}"`,
         `model_reasoning_effort = "${process.env.AGENT_REASONING_EFFORT || "medium"}"`,
-        `approval_policy = "on-failure"`,
-        `sandbox_mode = "read-only"`,
+        `approval_policy = "never"`,
+        `sandbox_mode = "workspace-write"`,
         "",
         `[projects.${JSON.stringify(process.cwd())}]`,
         `trust_level = "trusted"`,
@@ -67,8 +67,8 @@ export function getCodexThreadOptions(): ThreadOptions {
   return {
     model: process.env.AGENT_MODEL || "gpt-5.4",
     modelReasoningEffort: (process.env.AGENT_REASONING_EFFORT as ThreadOptions["modelReasoningEffort"]) || "medium",
-    sandboxMode: "read-only",
-    approvalPolicy: "on-failure",
+    sandboxMode: "workspace-write",
+    approvalPolicy: "never",
     workingDirectory: process.cwd(),
     skipGitRepoCheck: true,
     webSearchMode: "disabled",

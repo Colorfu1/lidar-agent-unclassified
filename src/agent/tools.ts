@@ -6,9 +6,10 @@ import type { BranchMerger } from "../branch/merger.js";
 import type { PipelineBridge } from "../pipeline/bridge.js";
 import type { Db } from "../db.js";
 import { notify } from "../events.js";
-import { execFile, execFileSync, spawnSync } from "child_process";
+import { execFile, execFileSync, spawn, spawnSync } from "child_process";
 import path from "path";
 import fs from "fs";
+import * as dsRoutes from "../routes/datasets.js";
 
 interface ToolDeps {
   mgr: ExperimentManager;
@@ -140,14 +141,15 @@ interface CloudmlConfirmTemplate {
 
 function buildCloudmlUploadPreview(build: any, appLabel = "ipc3090"): CloudmlUploadPreview {
   const enginePath = String(build.engine_path || "");
+  const isThor = (build.platform || "3090") === "thor";
   return {
     build_id: Number(build.id),
     model: String(build.model || ""),
     name: String(build.name || build.model || ""),
     engine_path: enginePath,
     upload_dir: enginePath ? path.join(path.dirname(enginePath), "cloudml_upload") : "",
-    platform: "ipc3090",
-    runtime: "trt108",
+    platform: isThor ? "thor_linux" : "ipc3090",
+    runtime: isThor ? "trt101010" : "trt108",
     precision: "fp32",
     app_label: appLabel,
   };
@@ -752,13 +754,707 @@ export function createAgentTools(deps: ToolDeps) {
     { annotations: { readOnlyHint: true } }
   );
 
+  // ---- Thor TRT engine build ----
+
+  const THOR_LOCAL_OUT = "/home/mi/data/det_and_seg/thor";
+  const THOR_SOC_DIR = "/tmp/wuwenda/engine";
+
+  const trtBuildThor = tool(
+    "trt_build_thor",
+    "Build a TRT engine (.plf) on the Thor SOC machine. Multi-hop pipeline: uploads ONNX to gateway (10.235.234.34) then to soc1, runs trtexec inside trtexec_package/, and copies the .plf and output.json back to the local machine. Creates a new folder under /home/mi/data/det_and_seg/thor/<name>/.",
+    {
+      onnx_path: z.string().describe("Absolute path to the local .onnx file"),
+      name: z.string().optional().describe("Build name / output folder name (defaults to onnx filename stem)"),
+    },
+    async (args) => {
+      if (!fs.existsSync(args.onnx_path)) {
+        return { content: [{ type: "text" as const, text: `ONNX file not found: ${args.onnx_path}` }], isError: true };
+      }
+      if (!args.onnx_path.endsWith(".onnx")) {
+        return { content: [{ type: "text" as const, text: `File does not look like an ONNX: ${args.onnx_path}` }], isError: true };
+      }
+
+      const onnxBasename = path.basename(args.onnx_path, ".onnx");
+      const buildName = (args.name || onnxBasename).trim();
+
+      const result = db.raw
+        .prepare(
+          `INSERT INTO trt_builds (model, checkpoint, name, status, upload_status, platform)
+           VALUES ('thor', ?, ?, 'running', 'pending_confirm', 'thor')`,
+        )
+        .run(args.onnx_path, buildName);
+      const buildId = Number(result.lastInsertRowid);
+
+      const scriptPath = path.resolve("scripts/trt_build_thor.sh");
+      const logPath = path.join(ensureRuntimeLogDir(), `trt-build-${buildId}.thor.log`);
+
+      const scriptArgs = [scriptPath, "--onnx", args.onnx_path, "--name", buildName];
+
+      const STEP_LABELS: Record<string, string> = {
+        prepare: "Preparing remote directories",
+        upload_to_gateway: "Uploading ONNX to gateway",
+        upload_to_soc: "Uploading ONNX to soc1",
+        build: "Running trtexec on soc1",
+        download_from_soc: "Downloading results from soc1",
+        download_to_local: "Downloading results to local",
+        done: "Pipeline finished",
+      };
+
+      try {
+        const out = await new Promise<string>((resolve, reject) => {
+          const child = spawn("bash", scriptArgs, {
+            cwd: path.resolve("."),
+            env: { ...process.env, BUILD_ID: String(buildId) },
+          });
+          let stdout = "";
+          let stderr = "";
+          const timeout = setTimeout(() => { child.kill(); reject(new Error("Thor build timed out (30m)")); }, 30 * 60 * 1000);
+
+          child.stdout.on("data", (chunk: Buffer) => {
+            const text = chunk.toString();
+            stdout += text;
+            for (const line of text.split("\n")) {
+              const stepMatch = line.match(/^step=(\w+)/);
+              if (stepMatch) {
+                const step = stepMatch[1];
+                const label = STEP_LABELS[step] || step;
+                notify("TRT Build (Thor)", `#${buildId} — ${label}`, "info");
+              }
+            }
+          });
+          child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+          child.on("error", (err) => { clearTimeout(timeout); reject(err); });
+          child.on("close", (code) => {
+            clearTimeout(timeout);
+            if (code !== 0) reject(Object.assign(new Error(`exit code ${code}`), { stdout, stderr }));
+            else resolve(stdout);
+          });
+        });
+
+        try { fs.writeFileSync(logPath, out, "utf-8"); } catch { /* ignore */ }
+
+        const engineMatch = out.match(/^engine_path=(.+)$/m);
+        const outDirMatch = out.match(/^out_dir=(.+)$/m);
+        const enginePath = engineMatch ? engineMatch[1].trim() : null;
+        const outDir = outDirMatch ? outDirMatch[1].trim() : null;
+
+        if (enginePath && fs.existsSync(enginePath)) {
+          db.raw
+            .prepare("UPDATE trt_builds SET status = 'completed', engine_path = ?, remote_out_dir = ?, completed_at = datetime('now') WHERE id = ?")
+            .run(enginePath, outDir, buildId);
+          notify("TRT Build (Thor)", `Build #${buildId} "${buildName}" completed. Engine: ${enginePath}`, "success");
+          const plfStem = path.basename(enginePath, ".plf");
+          notify("TRT Upload Confirm", JSON.stringify({
+            upload_info: { build_id: buildId, model_name: plfStem, engine_path: enginePath, platform: "thor" },
+            prefilled_json_template: { build_id: buildId, version: "v1.0.0", app_label: "ipc3090" },
+          }, null, 2), "info");
+          return {
+            content: [{
+              type: "text" as const,
+              text: `Thor TRT build #${buildId} completed.\nEngine: ${enginePath}\nOutput dir: ${outDir}\n\nCloudML upload is pending confirmation. Model name: ${plfStem}, default version: v1.0.0, app_label: ipc3090.\nShall I upload? (say "yes" to confirm, or specify a different version)`,
+            }],
+          };
+        } else {
+          db.raw
+            .prepare("UPDATE trt_builds SET status = 'completed', remote_out_dir = ?, stdout = ?, completed_at = datetime('now') WHERE id = ?")
+            .run(outDir, out.slice(-2000), buildId);
+          notify("TRT Build (Thor)", `Build #${buildId} "${buildName}" finished but no PLF found. trtexec may have failed.`, "info");
+          return {
+            content: [{
+              type: "text" as const,
+              text: [
+                `Thor TRT build #${buildId} pipeline finished but no .plf was downloaded.`,
+                `trtexec may have failed on soc1. Check log or soc1:${THOR_SOC_DIR}/ manually.`,
+                `Output dir: ${outDir}`,
+                `Log: ${logPath}`,
+              ].join("\n"),
+            }],
+          };
+        }
+      } catch (e: any) {
+        const stderr = String(e?.stderr || "");
+        const stdout = String(e?.stdout || "");
+        try { fs.writeFileSync(logPath, `${stdout}\n${stderr}`, "utf-8"); } catch { /* ignore */ }
+        db.raw
+          .prepare("UPDATE trt_builds SET status = 'failed', stdout = ?, completed_at = datetime('now') WHERE id = ?")
+          .run((stdout + stderr).slice(-2000), buildId);
+        notify("TRT Build (Thor)", `Build #${buildId} "${buildName}" failed`, "error");
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Thor TRT build #${buildId} failed: ${String(e?.message || e)}\nLog: ${logPath}`,
+          }],
+          isError: true,
+        };
+      }
+    },
+    { annotations: { readOnlyHint: true } },
+  );
+
+  const trtBuildThorStatus = tool(
+    "trt_build_thor_status",
+    "Get status of a Thor TRT engine build. Returns build metadata, engine path, and log location.",
+    {
+      build_id: z.number().optional().describe("Build ID (omit for latest Thor build)"),
+    },
+    async (args) => {
+      const row = args.build_id
+        ? db.raw.prepare("SELECT * FROM trt_builds WHERE id = ? AND platform = 'thor'").get(args.build_id)
+        : db.raw.prepare("SELECT * FROM trt_builds WHERE platform = 'thor' ORDER BY id DESC LIMIT 1").get();
+      if (!row) return { content: [{ type: "text" as const, text: "No Thor TRT build found" }], isError: true };
+      const build = row as any;
+
+      const detail = {
+        id: build.id,
+        platform: "thor",
+        model: build.model,
+        onnx_path: build.checkpoint,
+        name: build.name,
+        status: build.status,
+        engine_path: build.engine_path,
+        out_dir: build.remote_out_dir,
+        upload_status: build.upload_status,
+        started_at: build.started_at,
+        completed_at: build.completed_at,
+        log_path: path.resolve("data/runtime-logs", `trt-build-${build.id}.thor.log`),
+      };
+      return { content: [{ type: "text" as const, text: JSON.stringify(detail, null, 2) }] };
+    },
+    { annotations: { readOnlyHint: true } },
+  );
+
+  // ---- Dataset tools (mirrors TRT tool patterns) ----
+
+  const DATA_SSH_HOST = process.env.SSH_HOST || "root@localhost";
+  const DATA_SSH_PORT = process.env.SSH_PORT || "3333";
+  const REMOTE_DATA_ROOT = "/high_perf_store3/l3_data/wuwenda/l3_deep/data";
+  const VIS_SCRIPT = `${REMOTE_DATA_ROOT}/mi_pyvista_vis_multi_browser.py`;
+  const VIS_CONFIG_TEMPLATE = `${REMOTE_DATA_ROOT}/config/mi_pyvista_vis_multi_browser.yaml`;
+  const VIS_TMP_CONFIG = "/tmp/lidar_agent_vis.yaml";
+  const VIS_PORT = 8766;
+
+  function assertSafePath(p: string): void {
+    if (/[`$;|&(){}!#\\]/.test(p) || p.includes("'")) {
+      throw new Error(`Unsafe path rejected: ${p}`);
+    }
+  }
+
+  function sshExecAsync(command: string, timeoutMs = 15000): Promise<string> {
+    return new Promise((resolve, reject) => {
+      execFile(
+        "ssh",
+        ["-p", DATA_SSH_PORT, "-o", "StrictHostKeyChecking=no", DATA_SSH_HOST, command],
+        { encoding: "utf-8", timeout: timeoutMs },
+        (err, stdout) => {
+          if (err) reject(err);
+          else resolve((stdout || "").trim());
+        },
+      );
+    });
+  }
+
+  function resolveDataset(args: { dataset_id?: number; dataset_name?: string }): any {
+    if (args.dataset_id) return db.raw.prepare("SELECT * FROM datasets WHERE id = ?").get(args.dataset_id);
+    if (args.dataset_name) return db.raw.prepare("SELECT * FROM datasets WHERE name LIKE ?").get(`%${args.dataset_name}%`);
+    return null;
+  }
+
+  const datasetList = tool(
+    "dataset_list",
+    "List all known datasets with their statistics (frame counts, class distribution). Use to answer questions about available training/eval data.",
+    {
+      has_stats: z.boolean().optional().describe("If true, only return datasets that have statistics populated"),
+    },
+    async (args) => {
+      const query = args.has_stats
+        ? "SELECT * FROM datasets WHERE total_frames IS NOT NULL ORDER BY synced_at DESC"
+        : "SELECT * FROM datasets ORDER BY synced_at DESC";
+      const datasets = db.raw.prepare(query).all();
+      return { content: [{ type: "text" as const, text: JSON.stringify(datasets, null, 2) }] };
+    },
+    { annotations: { readOnlyHint: true } },
+  );
+
+  const datasetScan = tool(
+    "dataset_scan",
+    "Scan the remote machine for dataset directories and register them in the database. Does NOT fetch statistics — use dataset_refresh_stats for that.",
+    {},
+    async () => {
+      try {
+        const output = await sshExecAsync(
+          `ls -d ${REMOTE_DATA_ROOT}/*/ 2>/dev/null | head -30`,
+        );
+        if (!output) return { content: [{ type: "text" as const, text: "No dataset directories found on remote." }] };
+
+        const dirs = output.split("\n").filter(Boolean);
+        let added = 0;
+        for (const dir of dirs) {
+          const name = dir.split("/").filter(Boolean).pop() || dir;
+          const remotePath = dir.replace(/\/$/, "");
+          const existing = db.raw.prepare("SELECT id FROM datasets WHERE name = ?").get(name);
+          if (!existing) {
+            db.raw.prepare("INSERT INTO datasets (name, remote_path, synced_at) VALUES (?, ?, datetime('now'))").run(name, remotePath);
+            added++;
+          }
+        }
+        return { content: [{ type: "text" as const, text: `Scanned ${dirs.length} directories, added ${added} new datasets.` }] };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: `Scan failed: ${e}` }], isError: true };
+      }
+    },
+    { annotations: { readOnlyHint: true } },
+  );
+
+  const datasetRefreshStats = tool(
+    "dataset_refresh_stats",
+    "Fetch or refresh statistics (frame counts, class distribution) for a dataset by running dataset_stats.py on the remote machine. Use after scanning or when stats are missing.",
+    {
+      dataset_id: z.number().optional().describe("Dataset ID"),
+      dataset_name: z.string().optional().describe("Dataset name (used if dataset_id not provided)"),
+    },
+    async (args) => {
+      const ds = resolveDataset(args);
+      if (!ds) return { content: [{ type: "text" as const, text: "Dataset not found" }], isError: true };
+      if (!ds.remote_path) return { content: [{ type: "text" as const, text: `Dataset "${ds.name}" has no remote_path` }], isError: true };
+
+      try {
+        assertSafePath(ds.remote_path);
+        const statsJson = await sshExecAsync(
+          `python3 ${REMOTE_DATA_ROOT}/dataset_stats.py --path "${ds.remote_path}" 2>/dev/null`,
+          30000,
+        );
+        const stats = JSON.parse(statsJson);
+        db.raw
+          .prepare(
+            `UPDATE datasets SET total_frames = ?, train_frames = ?, val_frames = ?, class_distribution_json = ?, synced_at = datetime('now') WHERE id = ?`,
+          )
+          .run(
+            stats.total_frames ?? null,
+            stats.train_frames ?? null,
+            stats.val_frames ?? null,
+            stats.class_distribution ? JSON.stringify(stats.class_distribution) : null,
+            ds.id,
+          );
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Stats refreshed for "${ds.name}": ${stats.total_frames ?? "?"} frames (train: ${stats.train_frames ?? "?"}, val: ${stats.val_frames ?? "?"})`,
+          }],
+        };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: `Stats fetch failed for "${ds.name}": ${e}` }], isError: true };
+      }
+    },
+    { annotations: { readOnlyHint: true } },
+  );
+
+  const datasetVisualize = tool(
+    "dataset_visualize",
+    "Start the PyVista point cloud visualization server for a pkl file on the remote machine. Kills any existing viewer first. Returns a browser URL.",
+    {
+      pkl_path: z.string().describe("Absolute path to the pkl file on the remote machine"),
+    },
+    async (args) => {
+      const current = dsRoutes.activeVis;
+      if (current && current.pklPath === args.pkl_path) {
+        const url = await dsRoutes.visUrl(current.port);
+        return { content: [{ type: "text" as const, text: `Visualization already running for ${args.pkl_path} at ${url} (pid ${current.pid})` }] };
+      }
+
+      try {
+        assertSafePath(args.pkl_path);
+
+        await dsRoutes.killAllVis();
+
+        const yamlContent = [
+          `pkl_file: ${args.pkl_path}`,
+          `eval_dir: ""`,
+          `host: 0.0.0.0`,
+          `port: ${VIS_PORT}`,
+          `fps: 5.0`,
+          `point_size: 2.0`,
+          `sample_rate: 1`,
+          `label_source: gt`,
+          `at720: true`,
+          `open_browser: false`,
+        ].join("\n");
+
+        await sshExecAsync(`cat > ${VIS_TMP_CONFIG} << 'EOFCFG'\n${yamlContent}\nEOFCFG`, 5000);
+
+        const pidStr = await sshExecAsync(
+          `nohup python3 ${VIS_SCRIPT} --config ${VIS_TMP_CONFIG} > /tmp/vis_browser.log 2>&1 & echo $!`,
+          10000,
+        );
+        const pid = parseInt(pidStr.split("\n").pop() || "", 10);
+        if (!pid || isNaN(pid)) {
+          return { content: [{ type: "text" as const, text: "Failed to get PID from remote" }], isError: true };
+        }
+        dsRoutes.setActiveVis({ pid, port: VIS_PORT, pklPath: args.pkl_path, startedAt: Date.now() });
+        const url = await dsRoutes.visUrl(VIS_PORT);
+        notify("Dataset Vis Started", `Visualization at ${url}`, "info");
+        return { content: [{ type: "text" as const, text: `Visualization started for ${args.pkl_path} at ${url} (pid ${pid})` }] };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: `Failed to start visualization: ${e}` }], isError: true };
+      }
+    },
+    { annotations: { readOnlyHint: true } },
+  );
+
+  const datasetVisualizeStop = tool(
+    "dataset_visualize_stop",
+    "Stop the running PyVista visualization server.",
+    {},
+    async () => {
+      const current = dsRoutes.activeVis;
+      if (!current) return { content: [{ type: "text" as const, text: "No visualization is currently running" }], isError: true };
+
+      const pklPath = current.pklPath;
+      try {
+        await dsRoutes.killAllVis();
+      } catch { /* ignore */ }
+      notify("Dataset Vis Stopped", "Visualization stopped", "info");
+      return { content: [{ type: "text" as const, text: `Visualization stopped for ${pklPath}` }] };
+    },
+    { annotations: { readOnlyHint: true } },
+  );
+
+  // ---- Data generation pipeline tools ----
+
+  const SCRIPT_DIR = "/home/mi/codes/workspace/data";
+  const VOXEL_DIR = `${SCRIPT_DIR}/Sync/voxel_downsample`;
+
+  const SAFE_VERSION = /^[\w.\-]+$/;
+  const SAFE_PATH = /^\/[\w.\-/]+$/;
+
+  function assertSafeVersion(v: string): void {
+    if (!SAFE_VERSION.test(v)) throw new Error(`Unsafe version string: ${v}`);
+  }
+
+  function assertSafeRemotePath(p: string): void {
+    if (!SAFE_PATH.test(p)) throw new Error(`Unsafe path rejected: ${p}`);
+  }
+
+  const datasetListVersions = tool(
+    "dataset_list_versions",
+    "List available dataset versions from the deep_data API for a given task type. Returns version strings sorted newest first.",
+    {
+      task: z.enum(["FS", "OD"]).describe("Task type: FS for free space/segmentation, OD for object detection/flow"),
+    },
+    async (args) => {
+      const taskEnum = args.task === "FS" ? "FS" : "OD_3D";
+      const snippet = [
+        `import json`,
+        `from deep_data.projects.dataset.core.dataset_manager import DatasetManager`,
+        `from deep_data.projects.dataset.core.dataset import Task`,
+        `manager = DatasetManager()`,
+        `infos = manager.list_datasets_by_task(Task.${taskEnum})`,
+        `result = [{"version": i.version, "name": getattr(i, "name", i.version)} for i in infos]`,
+        `result.sort(key=lambda x: x["version"], reverse=True)`,
+        `print(json.dumps(result[:20]))`,
+      ].join("\n");
+
+      try {
+        const raw = await sshExecAsync(`python3 -c '${snippet.replace(/'/g, "'\"'\"'")}'`, 30_000);
+        const versions = JSON.parse(raw);
+        return { content: [{ type: "text" as const, text: JSON.stringify(versions, null, 2) }] };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: `Failed to list versions: ${e}` }], isError: true };
+      }
+    },
+    { annotations: { readOnlyHint: true } },
+  );
+
+  const datasetIncrementalStats = tool(
+    "dataset_incremental_stats",
+    "Compare two dataset versions and return incremental statistics (new clips minus old clips, grouped by sensor_type). Use before dataset_generate to show the user what will be generated.",
+    {
+      task: z.enum(["FS", "OD"]).describe("Task type"),
+      new_version: z.string().describe("New dataset version string (e.g. '20260417-1818')"),
+      old_version: z.string().optional().describe("Old dataset version to subtract for incremental. Omit for full dataset stats."),
+    },
+    async (args) => {
+      try { assertSafeVersion(args.new_version); } catch (e) {
+        return { content: [{ type: "text" as const, text: String(e) }], isError: true };
+      }
+      if (args.old_version) {
+        try { assertSafeVersion(args.old_version); } catch (e) {
+          return { content: [{ type: "text" as const, text: String(e) }], isError: true };
+        }
+      }
+      const taskEnum = args.task === "FS" ? "FS" : "OD_3D";
+      const oldV = args.old_version || "";
+      const snippet = [
+        `import json`,
+        `from collections import Counter`,
+        `from deep_data.projects.dataset.core.dataset_manager import DatasetManager`,
+        `from deep_data.projects.dataset.core.dataset import Task`,
+        `manager = DatasetManager()`,
+        `task = Task.${taskEnum}`,
+        `new_data = list(manager.load_dataset(task=task, version="${args.new_version}"))`,
+        `old_clip_adrns = set()`,
+        oldV ? `old_data = list(manager.load_dataset(task=task, version="${oldV}"))` : `old_data = []`,
+        oldV ? `old_clip_adrns = set(c["clip_adrn"] for c in old_data)` : `pass`,
+        `incremental = [c for c in new_data if c["clip_adrn"] not in old_clip_adrns]`,
+        `by_sensor = Counter(c.get("sensor_type", "unknown") for c in incremental)`,
+        `result = {`,
+        `  "task": "${args.task}",`,
+        `  "new_version": "${args.new_version}",`,
+        `  "old_version": "${oldV}" or None,`,
+        `  "total_new_clips": len(new_data),`,
+        `  "total_old_clips": len(old_clip_adrns),`,
+        `  "incremental_clips": len(incremental),`,
+        `  "by_sensor_type": dict(by_sensor),`,
+        `}`,
+        `print(json.dumps(result))`,
+      ].join("\n");
+
+      try {
+        const raw = await sshExecAsync(`python3 -c '${snippet.replace(/'/g, "'\"'\"'")}'`, 120_000);
+        const stats = JSON.parse(raw);
+        return { content: [{ type: "text" as const, text: JSON.stringify(stats, null, 2) }] };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: `Failed to get incremental stats: ${e}` }], isError: true };
+      }
+    },
+    { annotations: { readOnlyHint: true } },
+  );
+
+  const datasetGenerate = tool(
+    "dataset_generate",
+    "Launch the full data generation pipeline on the remote machine: anno_to_pkl → manifest → voxel_downsample. ONLY call after the user explicitly confirms. The monitor auto-advances through steps.",
+    {
+      task: z.enum(["FS", "OD"]).describe("Task type"),
+      new_version: z.string().describe("New version string"),
+      old_version: z.string().optional().describe("Old version for incremental (omit for full)"),
+      sensor_type: z.array(z.string()).describe("Sensor type filters, e.g. ['L3-AT720-FT']"),
+      output_dir: z.string().describe("Remote output base directory"),
+      output_dir_name: z.string().describe("Subdirectory name (e.g. '0417')"),
+      prefix: z.string().describe("File prefix (e.g. 'l3_at720', 'L3_od_at720')"),
+      num_threads: z.number().optional().describe("Number of threads (default 512)"),
+      debug_mode: z.boolean().optional().describe("Single-thread debug mode (default false)"),
+      name: z.string().optional().describe("Human-readable job name"),
+      include_demand: z.array(z.string()).optional().describe("FS only: include demand name filters"),
+      exclude_demand: z.array(z.string()).optional().describe("FS only: exclude demand name filters"),
+      skip_voxel_downsample: z.boolean().optional().describe("Skip voxel downsample step (default false)"),
+    },
+    async (args) => {
+      try {
+        assertSafeVersion(args.new_version);
+        if (args.old_version) assertSafeVersion(args.old_version);
+        assertSafeRemotePath(args.output_dir);
+        if (!SAFE_VERSION.test(args.output_dir_name)) throw new Error(`Unsafe output_dir_name: ${args.output_dir_name}`);
+        if (!SAFE_VERSION.test(args.prefix)) throw new Error(`Unsafe prefix: ${args.prefix}`);
+        for (const st of args.sensor_type) {
+          if (!SAFE_VERSION.test(st)) throw new Error(`Unsafe sensor_type: ${st}`);
+        }
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: String(e) }], isError: true };
+      }
+
+      const existingJob = db.raw
+        .prepare("SELECT id, name FROM dataset_jobs WHERE task_type = ? AND status = 'running'")
+        .get(args.task) as any;
+      if (existingJob) {
+        return {
+          content: [{ type: "text" as const, text: `A ${args.task} generation job is already running: #${existingJob.id} "${existingJob.name}". Wait for it to finish or mark it failed.` }],
+          isError: true,
+        };
+      }
+
+      const threads = args.num_threads ?? 512;
+      const debug = args.debug_mode ?? false;
+      const jobName = args.name || `${args.task}_${args.new_version}`;
+
+      let yamlContent: string;
+      if (args.task === "FS") {
+        const lines = [
+          `dataset_list:`,
+          `  - "${args.new_version}"`,
+          `old_dataset_list:`,
+        ];
+        if (args.old_version) {
+          lines.push(`  - "${args.old_version}"`);
+        } else {
+          lines.push(`  # none`);
+        }
+        lines.push(
+          `num_threads:`,
+          `  ${threads}`,
+          `output_dir:`,
+          `  "${args.output_dir}"`,
+          `output_dir_name:`,
+          `  - "${args.output_dir_name}"`,
+          `sensor_type:`,
+        );
+        for (const st of args.sensor_type) lines.push(`  - "${st}"`);
+        lines.push(`prefix:`, `  "${args.prefix}"`);
+        lines.push(`exclude_demand:`);
+        if (args.exclude_demand?.length) {
+          for (const d of args.exclude_demand) lines.push(`  - "${d}"`);
+        } else {
+          lines.push(`  []`);
+        }
+        lines.push(`include_demand:`);
+        if (args.include_demand?.length) {
+          for (const d of args.include_demand) lines.push(`  - "${d}"`);
+        } else {
+          lines.push(`  []`);
+        }
+        lines.push(`debug_mode:`, `  ${debug ? "True" : "False"}`);
+        yamlContent = lines.join("\n");
+      } else {
+        const lines = [
+          `json_dir:`,
+          `  "/high_perf_store3/l3_data/private-datasets/perception/L3_OD_Dataset/"`,
+          `dataset_list:`,
+          `  - "${args.new_version}"`,
+          `old_dataset_list:`,
+        ];
+        if (args.old_version) {
+          lines.push(`  - "${args.old_version}"`);
+        } else {
+          lines.push(`  # none`);
+        }
+        lines.push(
+          `num_threads:`,
+          `  "${threads}"`,
+          `output_dir:`,
+          `  ${args.output_dir}`,
+          `output_dir_names:`,
+          `  - "${args.output_dir_name}"`,
+          `prefix:`,
+          `  "${args.prefix}"`,
+          `sensor_type:`,
+        );
+        for (const st of args.sensor_type) lines.push(`  - "${st}"`);
+        lines.push(`debug_mode:`, `  ${debug ? "True" : "False"}`);
+        yamlContent = lines.join("\n");
+      }
+
+      const configFile = args.task === "FS" ? "L3_FS_anno_to_pkl" : "L3_od_data_to_pkl";
+      const script = args.task === "FS" ? "raw_L3_FS_anno_to_pkl.py" : "raw_L3_OD_anno_to_pkl.py";
+
+      const result = db.raw
+        .prepare(
+          `INSERT INTO dataset_jobs (name, config, status, task_type, new_version, old_version, step, sensor_type, output_dir, skip_voxel)
+           VALUES (?, ?, 'running', ?, ?, ?, 'anno_to_pkl', ?, ?, ?)`,
+        )
+        .run(
+          jobName, yamlContent, args.task,
+          args.new_version, args.old_version ?? null,
+          JSON.stringify(args.sensor_type),
+          `${args.output_dir}/${args.output_dir_name}`,
+          args.skip_voxel_downsample ? 1 : 0,
+        );
+      const jobId = Number(result.lastInsertRowid);
+
+      try {
+        const configPath = `/tmp/lidar_agent_datagen_${jobId}.yaml`;
+        const logPath = `/tmp/lidar_agent_datagen_${jobId}.log`;
+
+        await sshExecAsync(`cat > ${configPath} << 'EOFCFG'\n${yamlContent}\nEOFCFG`, 5000);
+        await sshExecAsync(`cp ${configPath} ${SCRIPT_DIR}/config/${configFile}.yaml`, 5000);
+
+        const pidStr = await sshExecAsync(
+          `cd ${SCRIPT_DIR} && nohup python3 ${script} > ${logPath} 2>&1 & echo $!`,
+          10_000,
+        );
+        const remotePid = parseInt(pidStr.split("\n").pop() || "", 10);
+        if (!remotePid || isNaN(remotePid)) {
+          db.raw.prepare("UPDATE dataset_jobs SET status = 'failed' WHERE id = ?").run(jobId);
+          return { content: [{ type: "text" as const, text: `Failed to get PID from remote for job #${jobId}` }], isError: true };
+        }
+
+        db.raw
+          .prepare("UPDATE dataset_jobs SET remote_pid = ?, log_path = ? WHERE id = ?")
+          .run(remotePid, logPath, jobId);
+
+        notify("Dataset Generation", `Job #${jobId} "${jobName}" started (${args.task}, PID ${remotePid})`, "info");
+
+        const steps = args.skip_voxel_downsample
+          ? "anno_to_pkl → manifest"
+          : "anno_to_pkl → manifest → voxel_downsample";
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: [
+              `Dataset generation job #${jobId} started.`,
+              `Task: ${args.task}`,
+              `Version: ${args.new_version}${args.old_version ? ` (incremental from ${args.old_version})` : " (full)"}`,
+              `Sensors: ${args.sensor_type.join(", ")}`,
+              `Output: ${args.output_dir}/${args.output_dir_name}`,
+              `Remote PID: ${remotePid}`,
+              `Log: ${logPath}`,
+              `Pipeline: ${steps}`,
+              ``,
+              `The monitor will auto-advance through steps.`,
+            ].join("\n"),
+          }],
+        };
+      } catch (e) {
+        db.raw.prepare("UPDATE dataset_jobs SET status = 'failed' WHERE id = ?").run(jobId);
+        return { content: [{ type: "text" as const, text: `Failed to launch job #${jobId}: ${e}` }], isError: true };
+      }
+    },
+  );
+
+  const datasetGenerateStatus = tool(
+    "dataset_generate_status",
+    "Check status of a dataset generation job. Shows current step, remote log tail, and generated file count.",
+    {
+      job_id: z.number().optional().describe("Job ID (omit for latest)"),
+    },
+    async (args) => {
+      const job = (args.job_id
+        ? db.raw.prepare("SELECT * FROM dataset_jobs WHERE id = ?").get(args.job_id)
+        : db.raw.prepare("SELECT * FROM dataset_jobs ORDER BY id DESC LIMIT 1").get()) as any;
+      if (!job) return { content: [{ type: "text" as const, text: "No dataset jobs found" }], isError: true };
+
+      const info: Record<string, any> = {
+        id: job.id,
+        name: job.name,
+        status: job.status,
+        task_type: job.task_type,
+        step: job.step,
+        new_version: job.new_version,
+        old_version: job.old_version,
+        output_dir: job.output_dir,
+        manifest_pkl: job.manifest_pkl,
+        started_at: job.started_at,
+        completed_at: job.completed_at,
+      };
+
+      if (job.status === "running" && job.log_path) {
+        try {
+          info.log_tail = await sshExecAsync(`tail -20 "${job.log_path}" 2>/dev/null`, 10_000);
+        } catch { /* ignore */ }
+      }
+
+      if (job.output_dir) {
+        try {
+          const count = await sshExecAsync(
+            `find "${job.output_dir}" -name "*.bin" -type f 2>/dev/null | wc -l`,
+            15_000,
+          );
+          info.generated_files = parseInt(count.trim(), 10) || 0;
+        } catch { /* ignore */ }
+      }
+
+      return { content: [{ type: "text" as const, text: JSON.stringify(info, null, 2) }] };
+    },
+    { annotations: { readOnlyHint: true } },
+  );
+
   return createMcpServer({
     name: "lidar",
     version: "1.0.0",
     tools: [
       listExperiments, getEvalResults, compareExperiments, readConfig, proposeChange,
       listBranches, getBranchDiff, getDataStatus, submitPipeline, getPipelineStatus,
-      registerTool, trtBuild, trtBuildL4, trtBuildStatus, cloudmlUploadPreview, cloudmlUploadExecute, trtDeclineUpload,
+      registerTool, trtBuild, trtBuildL4, trtBuildStatus, trtBuildThor, trtBuildThorStatus, cloudmlUploadPreview, cloudmlUploadExecute, trtDeclineUpload,
+      datasetList, datasetScan, datasetRefreshStats, datasetVisualize, datasetVisualizeStop,
+      datasetListVersions, datasetIncrementalStats, datasetGenerate, datasetGenerateStatus,
     ],
   });
 }

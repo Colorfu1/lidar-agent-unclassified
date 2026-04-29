@@ -14,9 +14,10 @@ car, bus, truck, cyclist, pedestrian, barrier
 - FLOW: EPE (end-point error), per-class EPE
 
 ## TRT Engine Build
-Two parallel pipelines. Pick based on the user's target:
+Three pipelines. Pick based on the user's target:
 - 3090 / local dev / dev-machine → use trt_build (RTX 3090 docker)
 - L4 / car-side / edge → use trt_build_l4 (Volc ML task on L4 GPU)
+- Thor / SOC / PLF → use trt_build_thor (multi-hop SSH to Thor SOC)
 
 ### 3090 pipeline (trt_build)
 - lite: branch dev_lit, config s1_c128_4b_s2_64_b1_vfe_train_multibox_gtenlarge_48_deploy.py
@@ -33,6 +34,14 @@ Two parallel pipelines. Pick based on the user's target:
 - Task script writes verbose logs to <out_dir>/build.log on vepfs; chat monitor only reads the volc task log (stdout: sync_code/pip_install/onnx_export/trtexec/copy_artifact steps + final SUCCESS/FAIL line).
 - On completion, engine is scp'd to /home/mi/data/det_and_seg/L4/flatformer_v3/{name}/ automatically.
 - On failure, tell the user the remote build.log path (e.g. ssh -p 3333 root@localhost cat <remote_out_dir>/build.log) — do not ssh yourself unless asked.
+
+### Thor pipeline (trt_build_thor)
+- Builds PLF engines on Thor SOC via multi-hop SSH: local → gateway (inte@10.235.234.34) → soc1.
+- Uses \`sshpass\` for password-based SSH authentication (must be installed locally).
+- ONNX is uploaded through the gateway to soc1:/tmp/wuwenda/engine/, build runs on soc1, results (PLF + output.json) are pulled back to /home/mi/data/det_and_seg/thor/{name}/.
+- Build command is a placeholder for now — user will provide it later. Without --build-cmd, only the ONNX upload step runs.
+- On completion with PLF: triggers CloudML upload confirmation (same flow as 3090/L4).
+- Check status with \`trt_build_thor_status(build_id?)\`.
 
 ### General rules
 - Do NOT read, summarize, or display runtime logs in chat unless user explicitly asks.
@@ -54,9 +63,37 @@ Flow when a "TRT Upload Confirm" notification arrives:
 5. On decline, call \`trt_decline_upload\`.
 
 Notes:
-- Platform/app_label: BOTH 3090 and L4 use app_label "ipc3090".
+- Platform/app_label: 3090 and L4 use platform "ipc3090". Thor uses platform "thor_linux". All use app_label "ipc3090".
 - The model name defaults to the .plf filename stem (e.g. "s1_ftground_..._ep24_L4"), NOT the build preset name. If the user specifies a different name, pass it as a note but the upload name is fixed by the engine file.
 - Do not re-prompt if the build's upload_status is already approved/declined.
+
+## Dataset Generation (Incremental Data Pipeline)
+Four tools for chat-driven incremental data generation:
+- \`dataset_list_versions(task)\` — List available versions from deep_data API. task: "FS" or "OD".
+- \`dataset_incremental_stats(task, new_version, old_version?)\` — Compare two versions, show clip counts by sensor_type.
+- \`dataset_generate(task, new_version, old_version?, sensor_type, output_dir, ...)\` — Launch the full pipeline. ONLY call after user explicitly confirms.
+- \`dataset_generate_status(job_id?)\` — Check job progress (step, log tail, file count).
+
+### Workflow
+1. User says "generate FS data" or "generate OD data" → call \`dataset_list_versions\` to show available versions.
+2. Pick the 2 most recent versions (newest = new, second = old for incremental).
+3. Call \`dataset_incremental_stats\` to show the diff. Present a table of clip counts by sensor_type.
+4. Ask the user "Generate?" and wait for explicit confirmation.
+5. On "yes", call \`dataset_generate\` with appropriate params.
+6. Pipeline runs automatically: anno_to_pkl → manifest → voxel_downsample (monitor tracks progress).
+7. User can call \`dataset_generate_status\` to check progress anytime.
+
+### Config defaults by sensor type
+- AT720-ROBINW/AT720-FT/AT720-FTX/L3-AT720-* → prefix "l3_at720", output_dir ".../L3_fs_at720" or ".../L3_od_at720"
+- AT128-ROBINW/L3-AT128-* → prefix "l3_at128", output_dir ".../L3_fs_at128" or ".../L3_od_at128"
+- ETX-*/ETXPA-*/ETXPB-* → prefix "l3_etxpb", output_dir ".../L3_fs_etxpb"
+- Output base: /high_perf_store3/l3_data/wuwenda/fs_od/
+
+### Rules for dataset generation
+- User specifies task type explicitly ("FS" or "OD").
+- NEVER call \`dataset_generate\` without explicit user confirmation.
+- Always show incremental stats before asking for confirmation.
+- Default num_threads=512, debug_mode=false unless user says otherwise.
 
 ## Rules
 - NEVER execute changes directly. Use propose_change to create proposals.

@@ -21,6 +21,7 @@ import { toolRoutes } from "./routes/tools.js";
 import { datasetRoutes } from "./routes/datasets.js";
 import { eventBus, type AppNotification } from "./events.js";
 import { startTrtBuildMonitor } from "./trt/monitor.js";
+import { startDatasetJobMonitor } from "./data/monitor.js";
 
 const PORT = parseInt(process.env.PORT || "3000");
 const DB_PATH = process.env.DB_PATH || "./data/lidar-agent.db";
@@ -32,6 +33,7 @@ const merger = new BranchMerger(process.env.MMDET3D_ROOT || "../mmdet3d");
 const toolDeps = { mgr, merger, bridge, db };
 const dataScheduler = new DataUpdateScheduler(db, bridge, path.resolve("pipeline"));
 startTrtBuildMonitor(db);
+startDatasetJobMonitor(db);
 
 function extractBuildIdFromUploadConfirmBody(body: string): number | null {
   if (!body) return null;
@@ -168,6 +170,7 @@ app.ws("/chat", (ws, _req) => {
       assistantBuffer = "";
 
       for await (const event of agentSession.chat(effectiveUserPrompt)) {
+        console.log(`[chat ws] event: ${event.type}`, event.type === "error" ? event.content : "");
         if (event.type === "text") {
           ws.send(JSON.stringify(event));
           assistantBuffer += event.content;
@@ -195,6 +198,9 @@ app.ws("/chat", (ws, _req) => {
   });
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`lidar-agent listening on :${PORT}`);
 });
+
+process.on("SIGTERM", () => { server.close(); process.exit(0); });
+process.on("SIGINT", () => { server.close(); process.exit(0); });

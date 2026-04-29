@@ -59,6 +59,8 @@ export class AgentSession {
   }
 
   private *processEvent(event: ThreadEvent): Generator<StreamMessage> {
+    console.log(`[agent-session] event: ${event.type}`, JSON.stringify(event).slice(0, 300));
+
     if (event.type === "thread.started") {
       this.threadId = event.thread_id;
       this.onThreadStarted?.(event.thread_id);
